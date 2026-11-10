@@ -12,6 +12,7 @@
 //   GET  /status?ids=a,b,c                        -> {a:true, b:false}
 //   POST /connect             {id}                -> {url}   (cihaza "tünel aç" der, adresi bekler)
 //   POST /rename              {id, secret, newId} -> {id}    (newId boşsa rastgele yeni ID)
+//   POST /signal              {id, sdp}           -> {sdp}   (WebRTC teklifini cihaza iletir, yanıtı döner)
 //
 // ID biçimi: 9 haneli sayı (rastgele) ya da kullanıcının seçtiği ad (harfle başlar,
 // küçük harf/rakam/tire, 4-24 karakter; ör. "mustafa-pc").
@@ -99,6 +100,8 @@ export class Hub {
           return await this.connect(req, ip);
         case "/rename":
           return await this.rename(req, ip);
+        case "/signal":
+          return await this.signal(req, ip);
         case "/":
           return new Response("RemoteDesk hub\n");
       }
@@ -163,6 +166,37 @@ function fail(t){document.getElementById('sp').remove();m.className='e';m.textCo
     return new Response(html, {
       headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "X-Frame-Options": "DENY", "Referrer-Policy": "no-referrer" },
     });
+  }
+
+  // signal: WebRTC el sıkışması. Teklif cihaza iletilir, cihazın yanıtı döner. Bağlantı
+  // başına tek istek; sonrasında görüntü ve ses iki bilgisayar arasında doğrudan akar.
+  async signal(req, ip) {
+    if (req.method !== "POST") return json({ error: "yöntem" }, 405);
+    const body = await req.json().catch(() => null);
+    const id = body && body.id;
+    const sdp = body && body.sdp;
+    if (!validId(id) || typeof sdp !== "string" || sdp.length > 16000) return json({ error: "Geçersiz istek." }, 400);
+    if (this.limited("cn:" + ip, 20, 60_000) || this.limited("ct:" + id, 30, 60_000)) {
+      return json({ error: "Çok fazla deneme. Biraz sonra tekrar dene." }, 429);
+    }
+    const ws = this.online(id);
+    if (!ws) return json({ error: "Bu cihaz çevrimdışı ya da ID yanlış." }, 404);
+    const reqNo = "s" + String(++this.seq) + "-" + Date.now();
+    const answer = new Promise((resolve) => {
+      this.pending.set(reqNo, resolve);
+      setTimeout(() => resolve(null), 15_000);
+    });
+    try {
+      ws.send(JSON.stringify({ t: "signal", req: reqNo, sdp }));
+    } catch {
+      this.pending.delete(reqNo);
+      return json({ error: "Bu cihaz çevrimdışı." }, 404);
+    }
+    const m = await answer;
+    this.pending.delete(reqNo);
+    if (!m) return json({ error: "Karşı cihaz yanıt vermedi." }, 504);
+    if (m.err || typeof m.sdp !== "string") return json({ error: m.err || "Doğrudan bağlantı kurulamadı." }, 502);
+    return json({ sdp: m.sdp });
   }
 
   async rename(req, ip) {
@@ -277,13 +311,14 @@ function fail(t){document.getElementById('sp').remove();m.className='e';m.textCo
   }
 
   webSocketMessage(ws, msg) {
-    if (typeof msg !== "string" || msg.length > 4096) return;
+    if (typeof msg !== "string" || msg.length > 20000) return;
     let m;
     try { m = JSON.parse(msg); } catch { return; }
     if (!m || typeof m.t !== "string") return;
     const att = ws.deserializeAttachment() || {};
     const cleanIds = (a) => (Array.isArray(a) ? [...new Set(a.filter(validId))].slice(0, 100) : []);
     switch (m.t) {
+      case "signal-answer":
       case "url": {
         const resolve = typeof m.req === "string" && this.pending.get(m.req);
         if (resolve) resolve(m);

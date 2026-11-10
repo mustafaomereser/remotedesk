@@ -172,6 +172,8 @@ type Client struct {
 	Hello func() (avail bool, watch []string)
 	// OnPresence, izlenen cihazların çevrimiçi durumu değişince (ve ilk bağlanışta) çağrılır.
 	OnPresence func(map[string]bool)
+	// OnSignal, biri WebRTC ile doğrudan bağlanmak istediğinde teklifi verir; yanıtı dönmelidir.
+	OnSignal func(offer string) (string, error)
 
 	mu   sync.Mutex
 	conn *websocket.Conn
@@ -232,7 +234,7 @@ func (c *Client) session(ctx context.Context) error {
 		return err
 	}
 	defer conn.CloseNow()
-	conn.SetReadLimit(16 << 10)
+	conn.SetReadLimit(64 << 10)
 	c.mu.Lock()
 	c.conn = conn
 	c.mu.Unlock()
@@ -307,6 +309,7 @@ func (c *Client) session(ctx context.Context) error {
 			T   string          `json:"t"`
 			Req string          `json:"req"`
 			S   map[string]bool `json:"s"`
+			SDP string          `json:"sdp"`
 		}
 		if json.Unmarshal(data, &m) != nil {
 			continue
@@ -315,6 +318,20 @@ func (c *Client) session(ctx context.Context) error {
 			if c.OnPresence != nil && m.S != nil {
 				c.OnPresence(m.S)
 			}
+			continue
+		}
+		if m.T == "signal" && m.Req != "" {
+			go func(req, offer string) {
+				reply := map[string]string{"t": "signal-answer", "req": req}
+				if c.OnSignal == nil {
+					reply["err"] = "Doğrudan bağlantı desteklenmiyor."
+				} else if ans, err := c.OnSignal(offer); err != nil {
+					reply["err"] = err.Error()
+				} else {
+					reply["sdp"] = ans
+				}
+				c.Send(reply)
+			}(m.Req, m.SDP)
 			continue
 		}
 		if m.T != "open" || m.Req == "" {
@@ -335,4 +352,15 @@ func (c *Client) session(ctx context.Context) error {
 			conn.Write(wctx, websocket.MessageText, b)
 		}(m.Req)
 	}
+}
+
+// Signal, hedef cihaza WebRTC teklifini iletir ve yanıtını döner.
+func Signal(ctx context.Context, server, id, offer string) (string, error) {
+	var out struct {
+		SDP string `json:"sdp"`
+	}
+	if err := postJSON(ctx, server+"/signal", map[string]string{"id": id, "sdp": offer}, &out); err != nil {
+		return "", err
+	}
+	return out.SDP, nil
 }

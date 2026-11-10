@@ -582,6 +582,7 @@ func (a *App) uiHandler() http.Handler {
 	mux.HandleFunc("POST /api/host/password", a.handlePassword)
 	mux.HandleFunc("POST /api/settings", a.handleSettings)
 	mux.HandleFunc("POST /api/viewer/open", a.handleViewerOpen)
+	mux.HandleFunc("POST /api/rtc/connect", a.handleRTCConnect)
 	mux.HandleFunc("GET /api/viewer/take", a.handleViewerTake)
 	mux.HandleFunc("GET /api/rtc/events", a.handleRTCEvents)
 	mux.HandleFunc("POST /api/rtc", a.handleRTCSend)

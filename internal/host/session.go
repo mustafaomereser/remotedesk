@@ -11,7 +11,6 @@ import (
 	"sync/atomic"
 	"time"
 
-
 	"remotedesk/internal/capture"
 	"remotedesk/internal/clipboard"
 	"remotedesk/internal/desktop"

@@ -88,6 +88,12 @@ func (a *App) hubLoop(ctx context.Context) {
 					return a.isOnline(), a.peers.ids()
 				},
 				OnPresence: a.peers.setPresence,
+				OnSignal: func(offer string) (string, error) {
+					if !a.isOnline() {
+						return "", errors.New("Karşı cihaz bağlantılara kapalı.")
+					}
+					return a.host.HandleOffer(offer)
+				},
 				OnState: func(connected bool) {
 					a.mu.Lock()
 					a.hubConnected = connected

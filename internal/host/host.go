@@ -41,13 +41,14 @@ type Server struct {
 	// Concurrent, "aynı anda kullanım" (simülasyon modu) açıksa true döner (nil olabilir).
 	Concurrent func() bool
 
-	mu        sync.Mutex
-	active    context.CancelFunc
-	sess      *session // aktif oturum (sesli görüşme sinyalini iletmek için)
-	fails     int
-	lockUntil time.Time
-	unauthed  int // henüz şifresini göndermemiş bağlantı sayısı
-	lastReq   time.Time
+	mu         sync.Mutex
+	active     context.CancelFunc
+	sess       *session // aktif oturum (sesli görüşme sinyalini iletmek için)
+	fails      int
+	lockUntil  time.Time
+	unauthed   int // henüz şifresini göndermemiş bağlantı sayısı
+	rtcPending int // el sıkışmadaki WebRTC bağlantıları
+	lastReq    time.Time
 }
 
 // allowRequest: şifresiz bağlantı isteklerini sınırlar (karşı tarafı onay pencereleriyle
@@ -173,6 +174,28 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /style.css", page("style.css", "text/css; charset=utf-8"))
 	mux.HandleFunc("GET /rtc.js", page("rtc.js", "text/javascript; charset=utf-8"))
 	mux.HandleFunc("GET /titlebar.js", page("titlebar.js", "text/javascript; charset=utf-8"))
+	// WebRTC el sıkışması (sunucusuz modda tünel üzerinden; sunuculu modda buluşma sunucusu
+	// üzerinden HandleOffer doğrudan çağrılır).
+	mux.HandleFunc("POST /rtc", func(w http.ResponseWriter, r *http.Request) {
+		if fromBrowser(r) {
+			http.Error(w, "yalnızca uygulama", http.StatusForbidden)
+			return
+		}
+		var body struct {
+			SDP string `json:"sdp"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body); err != nil || body.SDP == "" {
+			http.Error(w, "geçersiz istek", 400)
+			return
+		}
+		ans, err := s.HandleOffer(body.SDP)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"sdp": ans})
+	})
 	mux.HandleFunc("/", http.NotFound)
 	return mux
 }

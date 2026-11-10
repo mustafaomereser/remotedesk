@@ -93,15 +93,35 @@ $('webLogin').onsubmit = (e) => {
 // Kalıcı ID ise önce sunucudan hedef cihazın o anki adresi istenir (cihaz bu sırada
 // tünelini açar). Yeni açılan tünelin erişilebilir olması birkaç saniye sürebildiği için
 // ilk bağlantı birkaç kez denenir.
+// Bağlantı sırası:
+//   1. Doğrudan (WebRTC): el sıkışma buluşma sunucusu ya da tünel üzerinden tek mesaj;
+//      sonra görüntü ve kontrol iki bilgisayar arasında doğrudan akar.
+//   2. Kurulamazsa (ağ engeli) tünel: bugünkü WebSocket yolu.
+// Tarayıcıdan erişimde (webMode) doğrudan tünel kullanılır.
+let transportKind = '';
+
+const isHubId = (id) => /^\d{9}$/.test(id) || /^[a-z][a-z0-9-]{2,22}[a-z0-9]$/.test(id);
+
 async function connect({ id, pw, name, label }) {
   label = label || id;
   document.title = label + ' · RemoteDesk';
   if (window.rdSetTitle) window.rdSetTitle(document.title);
   $('vTitle').textContent = label;
 
+  if (!webMode) {
+    showOverlay('Bağlanıyor…');
+    const direct = await tryDirect(id);
+    if (direct) {
+      transportKind = 'direct';
+      attach(direct, pw, name, null);
+      return;
+    }
+  }
+
+  transportKind = 'tunnel';
   let target = id;
   let retries = 0;
-  if (/^\d{9}$/.test(id)) {
+  if (!webMode && isHubId(id)) {
     showOverlay('Karşı cihaza ulaşılıyor…');
     try {
       const r = await fetch('/api/resolve', {
@@ -110,13 +130,15 @@ async function connect({ id, pw, name, label }) {
         body: JSON.stringify({ id }),
       });
       if (!r.ok) throw new Error((await r.text()).trim() || 'Bağlanılamadı.');
-      // Not: ID'nin sahibi cihaz bağlantılara kapalıysa sunucu bunu "çevrimdışı" diye bildirir.
       target = (await r.json()).url;
       retries = 15; // yeni tünelin DNS kaydının yayılması ~10-20 sn sürebilir
     } catch (e) {
-      failed = true;
-      showOverlay(e.message || 'Bağlanılamadı.', true);
-      return;
+      // Sunucuda yoksa ve tünel adresine benziyorsa (kelime-kelime-kelime) öyle dene.
+      if (/^\d+$/.test(id) || !id.includes('-')) {
+        failed = true;
+        showOverlay(e.message || 'Bağlanılamadı.', true);
+        return;
+      }
     }
   }
   openSocket(target, pw, name, retries);
@@ -124,31 +146,130 @@ async function connect({ id, pw, name, label }) {
 
 function openSocket(target, pw, name, retries) {
   showOverlay('Bağlanıyor…');
+  const sock = new WebSocket(wsURL(target));
+  sock.binaryType = 'arraybuffer';
+  attach(sock, pw, name, retries > 0
+    ? () => { showOverlay('Bağlantı hazırlanıyor…'); setTimeout(() => openSocket(target, pw, name, retries - 1), 1500); }
+    : null);
+}
+
+// attach: WebSocket ya da DirectSocket'i oturuma bağlar (ikisi aynı arayüzü sunar).
+function attach(sock, pw, name, onEarlyFail) {
+  ws = sock;
   let opened = false;
-  ws = new WebSocket(wsURL(target));
-  ws.binaryType = 'arraybuffer';
-  ws.onopen = async () => {
+  const start = async () => {
     opened = true;
     showOverlay('Kimlik doğrulanıyor…');
     h264Supported = await checkH264();
     $('codec').querySelector('option[value=h264]').disabled = !h264Supported;
-    ws.send(JSON.stringify({ t: 'auth', pw, name, h264: h264Supported, v: +$('quality').value }));
+    sock.send(JSON.stringify({ t: 'auth', pw, name, h264: h264Supported, v: +$('quality').value }));
   };
-  ws.onmessage = onMessage;
-  ws.onclose = () => {
+  sock.onmessage = onMessage;
+  sock.onclose = () => {
+    if (ws !== sock) return;
     if (typeof call !== 'undefined' && call.state !== 'idle') { call.cleanup(); call.set('idle'); }
     connected = false;
     clearInputs(false);
     if (failed) return;
-    if (!opened && retries > 0) {
-      showOverlay('Bağlantı hazırlanıyor…');
-      setTimeout(() => openSocket(target, pw, name, retries - 1), 1500);
-      return;
-    }
+    if (!opened && onEarlyFail) { onEarlyFail(); return; }
     showOverlay(everConnected
       ? 'Bağlantı kapandı.'
       : 'Bağlanılamadı. ID doğru mu, karşı taraf çevrimiçi mi?', true);
   };
+  if (sock.readyState === WebSocket.OPEN) start();
+  else sock.onopen = start;
+}
+
+// ---- doğrudan bağlantı (WebRTC veri kanalları) ----
+
+const ICE = [{ urls: ['stun:stun.cloudflare.com:3478', 'stun:stun.l.google.com:19302'] }];
+
+// DirectSocket, iki veri kanalını WebSocket gibi gösterir: "ctl" giden (şifre, klavye/fare),
+// "media" gelen (kareler + kontrol mesajları). Büyük ikili mesajlar parçalı gelir
+// (ilk bayt: 0 tam, 1 devamı var, 2 son parça).
+class DirectSocket {
+  constructor(pc, ctl, media) {
+    this.pc = pc;
+    this.ctl = ctl;
+    this.media = media;
+    this.readyState = WebSocket.OPEN;
+    this.parts = [];
+    this.onmessage = null;
+    this.onclose = null;
+    this.onopen = null;
+    media.onmessage = (e) => {
+      if (typeof e.data === 'string') { this.emit(e.data); return; }
+      const u = new Uint8Array(e.data);
+      if (u[0] === 0) { this.emit(e.data.slice(1)); return; }
+      this.parts.push(u.slice(1));
+      if (u[0] !== 2) return;
+      let n = 0;
+      for (const p of this.parts) n += p.length;
+      const out = new Uint8Array(n);
+      let o = 0;
+      for (const p of this.parts) { out.set(p, o); o += p.length; }
+      this.parts = [];
+      this.emit(out.buffer);
+    };
+    const down = () => this.shut();
+    ctl.onclose = down;
+    media.onclose = down;
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === 'failed' || pc.connectionState === 'closed') down();
+    };
+  }
+  emit(data) { if (this.onmessage) this.onmessage({ data }); }
+  send(s) {
+    if (this.readyState !== WebSocket.OPEN) return;
+    try { this.ctl.send(s); } catch {}
+  }
+  close() { this.shut(); }
+  shut() {
+    if (this.readyState === WebSocket.CLOSED) return;
+    this.readyState = WebSocket.CLOSED;
+    try { this.pc.close(); } catch {}
+    if (this.onclose) this.onclose();
+  }
+}
+
+function waitFor(cond, ms) {
+  return new Promise((resolve) => {
+    const t0 = Date.now();
+    const tick = () => (cond() || Date.now() - t0 > ms ? resolve(cond()) : setTimeout(tick, 50));
+    tick();
+  });
+}
+
+async function tryDirect(id) {
+  if (typeof RTCPeerConnection === 'undefined') return null;
+  let pc = null;
+  const attempt = (async () => {
+    pc = new RTCPeerConnection({ iceServers: ICE });
+    const ctl = pc.createDataChannel('ctl');
+    const media = pc.createDataChannel('media');
+    media.binaryType = 'arraybuffer';
+    await pc.setLocalDescription(await pc.createOffer());
+    // Adaylar teklife girsin: el sıkışma tek gidiş-dönüş.
+    await waitFor(() => pc.iceGatheringState === 'complete', 2500);
+    const r = await fetch('/api/rtc/connect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, sdp: pc.localDescription.sdp }),
+    });
+    if (!r.ok) throw new Error((await r.text()).trim());
+    const { sdp } = await r.json();
+    await pc.setRemoteDescription({ type: 'answer', sdp });
+    const ok = await waitFor(() => ctl.readyState === 'open' && media.readyState === 'open', 8000);
+    if (!ok) throw new Error('doğrudan bağlantı kurulamadı');
+    return new DirectSocket(pc, ctl, media);
+  })();
+  try {
+    return await Promise.race([attempt, new Promise((_, rej) => setTimeout(() => rej(new Error('zaman aşımı')), 14000))]);
+  } catch (e) {
+    console.log('doğrudan bağlantı yok, tünel kullanılacak:', e && e.message);
+    if (pc) try { pc.close(); } catch {}
+    return null;
+  }
 }
 
 let controlAllowed = true;
@@ -475,8 +596,10 @@ Karşı taraf: ${hostStat.fps.toFixed(1)} kare/sn üretiyor, ekran yakalama orta
       (hostStat.br ? `, hedef bit hızı ${(hostStat.br / 1e6).toFixed(1)} Mbps (bağlantıya göre ayarlanır).` : '.');
   }
   const mbps = (bytes * 8 / 1e6).toFixed(1);
-  $('vStat').textContent = `${frames} fps · ${r} · ${mbps} Mbps`;
-  $('vStat').title = `${codec} · ${frames} fps · gecikme ${r} · ${mbps} Mbps${host}`;
+  const via = transportKind === 'direct' ? 'Doğrudan' : transportKind === 'tunnel' ? 'Tünel' : '';
+  $('vStat').textContent = `${via ? via + ' · ' : ''}${frames} fps · ${r} · ${mbps} Mbps`;
+  $('vStat').title = (via === 'Doğrudan' ? 'Doğrudan bağlantı (WebRTC): görüntü iki bilgisayar arasında doğrudan akıyor.\n' : via === 'Tünel' ? 'Tünel üzerinden (Cloudflare): doğrudan bağlantı kurulamadı ya da desteklenmiyor.\n' : '') +
+    `${codec} · ${frames} fps · gecikme ${r} · ${mbps} Mbps${host}`;
   frames = 0;
   bytes = 0;
 }, 1000);
