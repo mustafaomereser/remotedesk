@@ -32,6 +32,7 @@ const (
 	wmKeyDown     = 0x0100
 	wmKeyUp       = 0x0101
 	wmChar        = 0x0102
+	wmCancelMode  = 0x001F
 
 	mkLButton = 0x0001
 	mkRButton = 0x0002
@@ -40,11 +41,17 @@ const (
 
 type bgState struct {
 	target  uintptr         // klavyenin gideceği pencere (son tıklanan)
-	down    map[int]uintptr // basılı düğme -> o anki pencere (bırakma aynı pencereye)
+	down    map[int]bgPress // basılı düğme -> bekleyen basma (bırakmada birlikte gönderilir)
 	lastBtn int
 	lastAt  time.Time
 	lastX   int32
 	lastY   int32
+}
+
+type bgPress struct {
+	hwnd uintptr
+	msg  uintptr
+	lp   uintptr
 }
 
 type winPoint struct{ X, Y int32 }
@@ -64,35 +71,25 @@ func post(hwnd, m, wp, lp uintptr) {
 	procPostMessageW.Call(hwnd, m, wp, lp)
 }
 
-func (in *Injector) bgMK() uintptr {
-	var mk uintptr
-	if _, ok := in.bg.down[0]; ok {
-		mk |= mkLButton
-	}
-	if _, ok := in.bg.down[2]; ok {
-		mk |= mkRButton
-	}
-	if _, ok := in.bg.down[1]; ok {
-		mk |= mkMButton
-	}
-	return mk
-}
+// bgMK: basmalar bırakmaya kadar bekletildiği için hedef pencere hiçbir zaman
+// "düğme basılı" durumunu görmez.
+func (in *Injector) bgMK() uintptr { return 0 }
 
 func (in *Injector) bgPoint(x, y int) (int32, int32) {
 	dx, dy := in.m.apply(x, y)
 	return int32(dx), int32(dy)
 }
 
-// BgMove: basılı düğme varsa (sürükleme) o pencereye, yoksa alttaki pencereye hareket bildirir.
+// BgMove: alttaki pencereye hareket bildirir (hover). Düğme basılıyken gönderilmez:
+// simülasyonda sürükleme desteklenmez.
 func (in *Injector) BgMove(x, y int) {
 	in.mu.Lock()
 	defer in.mu.Unlock()
+	if len(in.bg.down) > 0 {
+		return
+	}
 	px, py := in.bgPoint(x, y)
 	hwnd := windowAt(px, py)
-	for _, h := range in.bg.down {
-		hwnd = h
-		break
-	}
 	if hwnd != 0 {
 		post(hwnd, wmMouseMove, in.bgMK(), clientLParam(hwnd, px, py))
 	}
@@ -102,7 +99,7 @@ func (in *Injector) BgButton(b int, down bool, x, y int) {
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	if in.bg.down == nil {
-		in.bg.down = map[int]uintptr{}
+		in.bg.down = map[int]bgPress{}
 	}
 	px, py := in.bgPoint(x, y)
 	var downMsg, upMsg uintptr
@@ -122,8 +119,6 @@ func (in *Injector) BgButton(b int, down bool, x, y int) {
 			return
 		}
 		lp := clientLParam(hwnd, px, py)
-		post(hwnd, wmMouseMove, in.bgMK(), lp)
-		in.bg.down[b] = hwnd
 		in.bg.target = hwnd
 		msg := downMsg
 		// Aynı yere 500 ms içinde ikinci sol tık: çift tıklama mesajı
@@ -135,15 +130,33 @@ func (in *Injector) BgButton(b int, down bool, x, y int) {
 		} else {
 			in.bg.lastBtn, in.bg.lastAt, in.bg.lastX, in.bg.lastY = b, now, px, py
 		}
-		post(hwnd, msg, in.bgMK(), lp)
+		// Basma hemen gönderilmez: masaüstü, liste, başlık çubuğu gibi pencereler basmayı
+		// alınca fareyi yakalayıp gerçek düğmenin bırakılmasını bekleyen bir döngüye girer
+		// (seçim dikdörtgeni, sürükleme) ve yerel kullanıcının faresi takılı kalır.
+		in.bg.down[b] = bgPress{hwnd: hwnd, msg: msg, lp: lp}
 		return
 	}
-	hwnd, ok := in.bg.down[b]
+	p, ok := in.bg.down[b]
 	if !ok {
 		return
 	}
 	delete(in.bg.down, b)
-	post(hwnd, upMsg, in.bgMK(), clientLParam(hwnd, px, py))
+	// Basma + bırakma art arda kuyruğa girer: döngüye girilse bile bırakmayı hemen görür.
+	// WM_CANCELMODE, yine de başlamış bir yakalama/sürükleme döngüsünü iptal eder.
+	post(p.hwnd, wmMouseMove, 0, p.lp)
+	post(p.hwnd, p.msg, downFlag(b), p.lp)
+	post(p.hwnd, upMsg, 0, p.lp)
+	post(p.hwnd, wmCancelMode, 0, 0)
+}
+
+func downFlag(b int) uintptr {
+	switch b {
+	case 0:
+		return mkLButton
+	case 2:
+		return mkRButton
+	}
+	return mkMButton
 }
 
 func abs32(v int32) int32 {

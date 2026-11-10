@@ -35,6 +35,7 @@ func main() {
 	h264 := flag.Bool("h264", false, "H.264 iste")
 	h264out := flag.String("h264out", "", "H.264 akışını bu dosyaya yaz")
 	name := flag.String("name", "", "bağlanırken gönderilecek ad (imleç etiketi)")
+	click := flag.String("click", "", "bağlanınca bu noktaya (x,y, kare koordinatı) sol tık gönder")
 	move := flag.Bool("move", false, "bağlanınca fareyi ekranın ortasında daire çizerek gezdir")
 	flag.Parse()
 
@@ -96,6 +97,22 @@ func main() {
 				if *clip != "" {
 					wsjson.Write(ctx, c, map[string]string{"t": "clip", "text": *clip})
 					*clip = ""
+				}
+				if *click != "" {
+					var cx, cy int
+					fmt.Sscanf(*click, "%d,%d", &cx, &cy)
+					*click = ""
+					go func() {
+						time.Sleep(500 * time.Millisecond)
+						wsjson.Write(ctx, c, map[string]any{"t": "mm", "x": cx, "y": cy})
+						wsjson.Write(ctx, c, map[string]any{"t": "mb", "b": 0, "d": true, "x": cx, "y": cy})
+						for i := 1; i <= 10; i++ { // sürükleme denemesi
+							wsjson.Write(ctx, c, map[string]any{"t": "mm", "x": cx + i*5, "y": cy + i*4})
+							time.Sleep(30 * time.Millisecond)
+						}
+						wsjson.Write(ctx, c, map[string]any{"t": "mb", "b": 0, "d": false, "x": cx + 50, "y": cy + 40})
+						log.Printf("tık gönderildi: %d,%d", cx, cy)
+					}()
 				}
 				if *move {
 					*move = false
