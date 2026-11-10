@@ -4,8 +4,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/coder/websocket"
-	"github.com/coder/websocket/wsjson"
 )
 
 // flow, gönderilip viewer tarafından henüz onaylanmamış kareleri sayar ve
@@ -90,7 +88,7 @@ type perf struct {
 func (p *perf) capture(d time.Duration) { p.capSum += d; p.caps++ }
 func (p *perf) frame()                  { p.frames++ }
 
-func (p *perf) report(ctx context.Context, c *websocket.Conn, fl *flow, w, h, bitrate int) {
+func (p *perf) report(ctx context.Context, c Conn, fl *flow, w, h, bitrate int) {
 	el := time.Since(p.start)
 	if p.start.IsZero() {
 		p.start = time.Now()
@@ -103,7 +101,7 @@ func (p *perf) report(ctx context.Context, c *websocket.Conn, fl *flow, w, h, bi
 	if p.caps > 0 {
 		capMs = float64(p.capSum.Microseconds()) / float64(p.caps) / 1000
 	}
-	wsjson.Write(ctx, c, map[string]any{
+	c.WriteJSON(ctx, map[string]any{
 		"t":    "hstat",
 		"fps":  float64(p.frames) / el.Seconds(),
 		"cap":  capMs,

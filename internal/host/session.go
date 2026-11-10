@@ -11,8 +11,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/coder/websocket"
-	"github.com/coder/websocket/wsjson"
 
 	"remotedesk/internal/capture"
 	"remotedesk/internal/clipboard"
@@ -45,7 +43,7 @@ const (
 )
 
 type session struct {
-	c          *websocket.Conn
+	c          Conn
 	in         *input.Injector
 	video      VideoInfo
 	wantH264   bool
@@ -85,7 +83,7 @@ type session struct {
 	half     capture.Frame // Retina küçültme tamponu
 }
 
-func newSession(c *websocket.Conn, vi VideoInfo, wantH264 bool) *session {
+func newSession(c Conn, vi VideoInfo, wantH264 bool) *session {
 	s := &session{
 		c: c, in: input.New(), video: vi, wantH264: wantH264,
 		ack: make(chan struct{}, 64), vack: make(chan struct{}, 64), poke: make(chan struct{}, 1),
@@ -134,7 +132,7 @@ func (s *session) run(ctx context.Context) error {
 func (s *session) readLoop(ctx context.Context) {
 	for {
 		var m message
-		if err := wsjson.Read(ctx, s.c, &m); err != nil {
+		if err := s.c.ReadJSON(ctx, &m); err != nil {
 			return
 		}
 		if (m.T == "mm" || m.T == "mb" || m.T == "wh" || m.T == "k") && !s.allowed().Control {
@@ -227,7 +225,7 @@ func (s *session) readLoop(ctx context.Context) {
 				}
 			}
 		case "ping":
-			wsjson.Write(ctx, s.c, map[string]any{"t": "pong", "ts": m.TS})
+			s.c.WriteJSON(ctx, map[string]any{"t": "pong", "ts": m.TS})
 		case "rtc":
 			if s.onRTC != nil && len(m.RTC) > 0 && len(m.RTC) < 64<<10 {
 				s.onRTC(m.RTC)
@@ -260,7 +258,7 @@ func (s *session) route(ctx context.Context, release bool) int {
 	if r != s.lastRoute || (r == routeDrop && time.Since(s.lastBusy) > time.Second) {
 		s.lastRoute, s.lastBusy = r, time.Now()
 		mode := map[int]string{routeNormal: "normal", routeSim: "sim", routeDrop: "wait"}[r]
-		wsjson.Write(ctx, s.c, map[string]any{"t": "busy", "mode": mode})
+		s.c.WriteJSON(ctx, map[string]any{"t": "busy", "mode": mode})
 	}
 	return r
 }
@@ -307,10 +305,10 @@ func (s *session) sendState(ctx context.Context) {
 		if secure {
 			log.Printf("güvenli masaüstü (UAC / kilit ekranı) açık")
 		}
-		wsjson.Write(ctx, s.c, map[string]any{"t": "secure", "on": secure, "elevated": sysutil.IsElevated()})
+		s.c.WriteJSON(ctx, map[string]any{"t": "secure", "on": secure, "elevated": sysutil.IsElevated()})
 	}
 	if !s.statSent || p != s.lastPerms {
-		wsjson.Write(ctx, s.c, map[string]any{"t": "perm", "control": p.Control, "clipboard": p.Clipboard})
+		s.c.WriteJSON(ctx, map[string]any{"t": "perm", "control": p.Control, "clipboard": p.Clipboard})
 	}
 	s.statSent, s.lastPerms, s.lastSecure = true, p, secure
 }
@@ -347,7 +345,7 @@ func (s *session) clipboardLoop(ctx context.Context) {
 		s.clipMu.Unlock()
 		if !skip {
 			log.Printf("pano değişti, viewer'a gönderiliyor (%d bayt)", len(text))
-			wsjson.Write(ctx, s.c, map[string]any{"t": "clip", "text": text})
+			s.c.WriteJSON(ctx, map[string]any{"t": "clip", "text": text})
 		}
 	}
 }
@@ -363,7 +361,7 @@ func (s *session) sendDisplays(ctx context.Context) error {
 	for i, d := range s.displays {
 		list[i] = displayInfo{d.W, d.H, d.Primary}
 	}
-	return wsjson.Write(ctx, s.c, map[string]any{"t": "displays", "list": list, "cur": s.cur})
+	return s.c.WriteJSON(ctx, map[string]any{"t": "displays", "list": list, "cur": s.cur})
 }
 
 func (s *session) sendMode(ctx context.Context) error {
@@ -372,11 +370,11 @@ func (s *session) sendMode(ctx context.Context) error {
 		_, enc, _ := s.videoReady()
 		m["enc"] = enc
 	}
-	return wsjson.Write(ctx, s.c, m)
+	return s.c.WriteJSON(ctx, m)
 }
 
 func (s *session) notice(ctx context.Context, msg string) {
-	wsjson.Write(ctx, s.c, map[string]any{"t": "notice", "msg": msg})
+	s.c.WriteJSON(ctx, map[string]any{"t": "notice", "msg": msg})
 }
 
 // applyRequests, viewer'ın monitör/codec isteklerini ve monitör takılıp çıkarılmasını işler.
@@ -447,7 +445,7 @@ func (s *session) streamLoop(ctx context.Context) error {
 		if !input {
 			msgs = append(msgs, "Karşı bilgisayarda Erişilebilirlik izni yok: fare ve klavye çalışmaz.")
 		}
-		wsjson.Write(ctx, s.c, map[string]any{"t": "warn", "msgs": msgs})
+		s.c.WriteJSON(ctx, map[string]any{"t": "warn", "msgs": msgs})
 	}
 
 	s.mode = "jpeg"
@@ -665,7 +663,7 @@ func (s *session) jpegLoop(ctx context.Context) error {
 			pw, ph, pstride = f.W, f.H, f.Stride
 			prev = nil
 			s.setMapping(d, f.W, f.H)
-			if err := wsjson.Write(ctx, s.c, map[string]any{"t": "init", "w": f.W, "h": f.H}); err != nil {
+			if err := s.c.WriteJSON(ctx, map[string]any{"t": "init", "w": f.W, "h": f.H}); err != nil {
 				return err
 			}
 		}
@@ -673,11 +671,11 @@ func (s *session) jpegLoop(ctx context.Context) error {
 		rects := diffRects(prev, f)
 		if len(rects) > 0 {
 			for _, p := range encodeRects(f, rects, int(s.quality.Load())) {
-				if err := s.c.Write(ctx, websocket.MessageBinary, p); err != nil {
+				if err := s.c.WriteBinary(ctx, p); err != nil {
 					return err
 				}
 			}
-			if err := s.c.Write(ctx, websocket.MessageBinary, []byte{msgFrameEnd}); err != nil {
+			if err := s.c.WriteBinary(ctx, []byte{msgFrameEnd}); err != nil {
 				return err
 			}
 			fl.onSend()
@@ -732,7 +730,7 @@ func (s *session) h264Loop(ctx context.Context) error {
 	defer e.Close()
 
 	s.setMapping(d, outW, outH)
-	if err := wsjson.Write(ctx, s.c, map[string]any{"t": "init", "w": outW, "h": outH}); err != nil {
+	if err := s.c.WriteJSON(ctx, map[string]any{"t": "init", "w": outW, "h": outH}); err != nil {
 		return err
 	}
 	s.keyframe.Store(false)
@@ -750,7 +748,7 @@ func (s *session) h264Loop(ctx context.Context) error {
 				msg[1] = 1
 			}
 			copy(msg[2:], fr.Data)
-			if err := s.c.Write(ectx, websocket.MessageBinary, msg); err != nil {
+			if err := s.c.WriteBinary(ectx, msg); err != nil {
 				sendErr <- err
 				return
 			}

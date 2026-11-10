@@ -17,7 +17,6 @@ import (
 	"unicode"
 
 	"github.com/coder/websocket"
-	"github.com/coder/websocket/wsjson"
 )
 
 type Server struct {
@@ -212,7 +211,7 @@ func (s *Server) SendRTC(msg json.RawMessage) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return wsjson.Write(ctx, sess.c, map[string]any{"t": "rtc", "rtc": msg})
+	return sess.c.WriteJSON(ctx, map[string]any{"t": "rtc", "rtc": msg})
 }
 
 // Kick aktif oturumu sonlandırır.
@@ -250,11 +249,16 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 	defer c.CloseNow()
 	c.SetReadLimit(maxClipBytes * 3) // pano metni JSON içinde kaçışlı gelebilir
+	s.serve(wsConn{c}, remoteAddr(r))
+}
 
+// serve, bağlantı türünden (WebSocket / WebRTC) bağımsız oturum akışıdır:
+// şifre ya da onay, tek oturum kuralı, oturum.
+func (s *Server) serve(c Conn, remote string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	remote := remoteAddr(r)
 	var name string
+	var err error
 
 	if !s.enterAuth() {
 		sendErr(ctx, c, "Sunucu meşgul. Biraz sonra tekrar dene.")
@@ -262,7 +266,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 	actx, acancel := context.WithTimeout(ctx, 10*time.Second)
 	var m message
-	err = wsjson.Read(actx, c, &m)
+	err = c.ReadJSON(actx, &m)
 	acancel()
 	if err != nil || m.T != "auth" {
 		s.leaveAuth()
@@ -276,7 +280,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		ok, _, locked = s.tryAuth(m.Pw)
 	}
 	if !request && !ok && !locked {
-		log.Printf("hatalı şifre denemesi: %s", remoteAddr(r))
+		log.Printf("hatalı şifre denemesi: %s", remote)
 		time.Sleep(time.Second) // bu bağlantı şifre aşaması kotasını tutmaya devam eder
 	}
 	s.leaveAuth()
@@ -311,14 +315,14 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	defer s.release()
 
 	if request {
-		wsjson.Write(ctx, c, map[string]string{"t": "wait"})
+		c.WriteJSON(ctx, map[string]string{"t": "wait"})
 		if !s.Confirm(ctx, remote, name) {
 			sendErr(ctx, c, "Bağlantı karşı tarafça reddedildi.")
 			return
 		}
 	}
 
-	log.Printf("oturum başladı: %s (%s)", remote, name)
+	log.Printf("oturum başladı: %s (%s, %s)", remote, name, map[string]string{"tunnel": "tünel", "direct": "doğrudan"}[c.Kind()])
 	if s.OnSession != nil {
 		s.OnSession(remote, name, true)
 		defer s.OnSession(remote, name, false)
@@ -346,14 +350,14 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 	err = sess.run(ctx)
 	log.Printf("oturum bitti: %s (%v)", remote, err)
-	c.Close(websocket.StatusNormalClosure, "")
+	c.Close("")
 }
 
-func sendErr(ctx context.Context, c *websocket.Conn, msg string) {
+func sendErr(ctx context.Context, c Conn, msg string) {
 	wctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	wsjson.Write(wctx, c, map[string]string{"t": "err", "msg": msg})
-	c.Close(websocket.StatusNormalClosure, "")
+	c.WriteJSON(wctx, map[string]string{"t": "err", "msg": msg})
+	c.Close("")
 }
 
 func (s *Server) claim(cancel context.CancelFunc) bool {
