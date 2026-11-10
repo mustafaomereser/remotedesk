@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RemoteDesk</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><span class="logo"></span>RemoteDesk</div>
+    <button id="quit" class="ghost small">Çıkış</button>
+  </header>
+
+  <main class="grid">
+    <section class="card">
+      <h2>Bu Bilgisayar</h2>
+      <p class="muted">Başka biri bu bilgisayara bağlanacaksa ona bu ID'yi ve şifreyi ver.</p>
+
+      <label class="lbl">ID</label>
+      <div class="field big">
+        <span id="myId" class="value mono">—</span>
+        <button class="small" id="idCopy">Kopyala</button>
+      </div>
+
+      <label class="lbl">Şifre</label>
+      <div class="field">
+        <span id="myPw" class="value mono">—</span>
+        <button class="small" id="pwShow">Göster</button>
+        <button class="small" id="pwCopy">Kopyala</button>
+        <button class="small" id="pwNew" title="Yeni rastgele şifre üret">Yenile</button>
+        <button class="small" id="pwEdit" title="Kendi şifreni belirle">Değiştir</button>
+      </div>
+      <form id="pwForm" class="pwform hidden">
+        <input id="pwInput" type="text" minlength="6" placeholder="En az 6 karakter" autocomplete="off">
+        <button class="primary small" type="submit">Kaydet</button>
+        <button class="ghost small" type="button" id="pwCancel">Vazgeç</button>
+      </form>
+
+      <div class="status"><span id="tunDot" class="dot busy"></span><span id="tunMsg">Başlatılıyor…</span></div>
+      <div class="status" style="margin-top:6px"><span id="vidDot" class="dot busy"></span><span id="vidMsg">H.264 hazırlanıyor…</span></div>
+      <div id="warnings"></div>
+
+      <label class="check"><input type="checkbox" id="autoAccept"> Bağlantıları onay sormadan kabul et</label>
+
+      <div id="sessionBox" class="session hidden">
+        <span>Bağlı: <b id="sessRemote" class="mono"></b> <span id="sessTime" class="muted"></span></span>
+        <button id="kick" class="danger small">Bağlantıyı kes</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Uzak Bilgisayar</h2>
+      <p class="muted">Bağlanmak istediğin bilgisayarın ID'sini ve şifresini gir.</p>
+      <form id="connectForm" autocomplete="off">
+        <label class="lbl" for="remoteId">ID</label>
+        <input id="remoteId" type="text" placeholder="ornek-kelime-kelime-kelime" spellcheck="false" required>
+        <label class="lbl" for="remotePw">Şifre</label>
+        <input id="remotePw" type="password" required>
+        <button class="primary wide" type="submit" style="width:100%">Bağlan</button>
+        <div id="connectErr" class="error-text"></div>
+      </form>
+      <div id="recent" class="recent"></div>
+    </section>
+  </main>
+
+  <div id="modal" class="modal hidden">
+    <div class="dialog">
+      <h3>Bağlantı isteği</h3>
+      <p><b id="reqRemote" class="mono"></b> bu bilgisayarı kontrol etmek istiyor.</p>
+      <p class="muted">Tanımıyorsan reddet.</p>
+      <div class="bar-timer"><div id="reqBar"></div></div>
+      <div class="row">
+        <button id="reject">Reddet</button>
+        <button id="accept" class="primary">Kabul et</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+  <script src="app.js"></script>
+</body>
+</html>

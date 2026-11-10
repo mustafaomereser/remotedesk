@@ -1,0 +1,51 @@
+package video
+
+import (
+	"runtime"
+	"strconv"
+)
+
+// candidates, denenecek H.264 kodlayıcılarıdır (öncelik sırasıyla).
+func candidates() []string {
+	if runtime.GOOS == "darwin" {
+		return []string{"h264_videotoolbox", "libx264"}
+	}
+	return []string{"h264_nvenc", "h264_qsv", "h264_amf", "libx264", "h264_mf"}
+}
+
+// encoderArgs, düşük gecikme için kodlayıcıya özel ayarlardır.
+// B-frame yok (her giriş karesi hemen çıkar), anahtar kare aralığı uzun
+// (ekran durağanken zaten kare üretilmiyor).
+func encoderArgs(enc string, bitrate int) []string {
+	b := strconv.Itoa(bitrate)
+	var a []string
+	switch enc {
+	case "libx264":
+		a = []string{"-preset", "ultrafast", "-tune", "zerolatency", "-crf", "23", "-maxrate", b, "-bufsize", b}
+	case "h264_nvenc":
+		a = []string{"-preset", "p2", "-tune", "ull", "-zerolatency", "1", "-rc", "vbr", "-cq", "23", "-b:v", b, "-maxrate", b, "-bufsize", b}
+	case "h264_qsv":
+		a = []string{"-preset", "veryfast", "-async_depth", "1", "-b:v", b}
+	case "h264_amf":
+		a = []string{"-usage", "ultralowlatency", "-quality", "speed", "-rc", "vbr_peak", "-b:v", b, "-maxrate", b}
+	case "h264_mf":
+		a = []string{"-scenario", "display_remoting", "-b:v", b}
+	case "h264_videotoolbox":
+		a = []string{"-realtime", "1", "-prio_speed", "1", "-allow_sw", "1", "-b:v", b}
+	default:
+		a = []string{"-b:v", b}
+	}
+	return append(a, "-g", "300", "-bf", "0")
+}
+
+// BitrateFor, viewer'daki kalite ayarını (10-95) bit hızına çevirir.
+func BitrateFor(quality int) int {
+	switch {
+	case quality <= 45:
+		return 2_500_000
+	case quality <= 70:
+		return 6_000_000
+	default:
+		return 12_000_000
+	}
+}

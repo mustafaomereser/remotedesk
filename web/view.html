@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <title>Bağlanıyor… · RemoteDesk</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="viewer">
+  <div id="bar" class="vbar">
+    <span id="vTitle" class="title mono"></span>
+    <span id="vStat" class="muted mono" style="font-size:12px"></span>
+    <span class="spacer"></span>
+    <select id="display" title="Monitör" class="hidden"></select>
+    <label class="check vcheck" title="Panoyu (kopyala/yapıştır) iki yönlü senkronize et"><input type="checkbox" id="clipSync" checked> Pano</label>
+    <select id="codec" title="Görüntü sıkıştırma: H.264 akıcı ve az bant genişliği kullanır, JPEG her yerde çalışır">
+      <option value="h264">H.264</option>
+      <option value="jpeg">JPEG</option>
+    </select>
+    <select id="quality" title="Görüntü kalitesi">
+      <option value="40">Hızlı</option>
+      <option value="65" selected>Dengeli</option>
+      <option value="85">Kaliteli</option>
+    </select>
+    <button id="scale" class="small">Gerçek boyut</button>
+    <button id="fs" class="small">Tam ekran</button>
+    <button id="disc" class="danger small">Bağlantıyı kes</button>
+  </div>
+  <div id="stage" class="stage">
+    <canvas id="screen" class="fit" tabindex="0"></canvas>
+    <div id="overlay" class="overlay">Bağlanıyor…</div>
+  </div>
+  <div id="toast" class="toast"></div>
+  <script src="view.js"></script>
+</body>
+</html>

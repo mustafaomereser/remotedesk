@@ -1,0 +1,74 @@
+name: mac-smoke
+
+# İmzalı + noter onaylı paketi gerçek bir Mac'te, kullanıcının yaptığı gibi açar:
+# indir → karantina işareti → Uygulamalar'a çıkar → `open` (Finder çift tıkla aynı yol).
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Test edilecek release etiketi
+        required: true
+
+jobs:
+  smoke:
+    runs-on: macos-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Sistem
+        run: sw_vers; uname -m
+
+      - name: Paketi indir ve kullanıcı gibi kur
+        run: |
+          gh release download "${{ inputs.tag }}" -R "${{ github.repository }}" -p '*-macos.zip' -D dl
+          ZIP="$(ls dl/*-macos.zip)"
+          # Tarayıcıdan indirilmiş gibi karantina işareti
+          xattr -w com.apple.quarantine "0081;$(printf %x "$(date +%s)");Safari;" "$ZIP"
+          ditto -x -k "$ZIP" /Applications
+          xattr -l /Applications/RemoteDesk.app | head -5
+          ls -la /Applications/RemoteDesk.app/Contents/MacOS
+
+      - name: İmza ve Gatekeeper
+        run: |
+          codesign -dv --verbose=4 /Applications/RemoteDesk.app 2>&1 | head -20 || true
+          codesign --verify --deep --strict --verbose=2 /Applications/RemoteDesk.app 2>&1 || true
+          spctl -a -vv -t exec /Applications/RemoteDesk.app 2>&1 || true
+          xcrun stapler validate /Applications/RemoteDesk.app 2>&1 || true
+
+      - name: Çift tıkla açma (open)
+        run: |
+          rm -rf ~/Library/Logs/DiagnosticReports/RemoteDesk* || true
+          START="$(date '+%Y-%m-%d %H:%M:%S')"
+          echo "$START" > start.txt
+          set +e
+          open /Applications/RemoteDesk.app
+          echo "open çıkış kodu: $?"
+          sleep 20
+          echo "--- çalışan süreçler"
+          pgrep -fl RemoteDesk || echo "RemoteDesk süreci YOK"
+          pgrep -fl cloudflared || true
+          echo "--- uygulama log'u"
+          cat ~/Library/Application\ Support/RemoteDesk/remotedesk.log 2>&1 | head -80
+          echo "--- çökme raporları"
+          ls -la ~/Library/Logs/DiagnosticReports/ 2>&1 | grep -i remotedesk || echo "çökme raporu yok"
+          for f in ~/Library/Logs/DiagnosticReports/RemoteDesk*; do [ -f "$f" ] && head -120 "$f"; done
+          exit 0
+
+      - name: Sistem log'u
+        if: always()
+        run: |
+          log show --start "$(cat start.txt)" --style compact \
+            --predicate 'process == "RemoteDesk" OR eventMessage CONTAINS[c] "RemoteDesk" OR eventMessage CONTAINS[c] "remotedesk"' \
+            2>/dev/null | grep -viE "mdworker|Spotlight" | tail -150 || true
+
+      - name: Doğrudan çalıştırma (stderr)
+        if: always()
+        run: |
+          pkill -f RemoteDesk || true
+          sleep 1
+          /Applications/RemoteDesk.app/Contents/MacOS/RemoteDesk -headless -notunnel -autoaccept > direct.txt 2>&1 &
+          PID=$!
+          sleep 10
+          kill $PID 2>/dev/null; wait $PID 2>/dev/null
+          echo "çıkış: $?"
+          head -60 direct.txt

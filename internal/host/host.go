@@ -1,0 +1,189 @@
+// Package host, bu bilgisayarı uzaktan kontrol için WebSocket üzerinden yayınlar.
+// Bu handler cloudflared tüneli ile dışarı açılır; yerel UI API'si asla buraya eklenmemelidir.
+package host
+
+import (
+	"context"
+	"log"
+	"net"
+	"net/http"
+	"sync"
+	"time"
+
+	"github.com/coder/websocket"
+	"github.com/coder/websocket/wsjson"
+)
+
+type Server struct {
+	// Auth, verilen şifre doğruysa true döner.
+	Auth func(pw string) bool
+	// Confirm, kullanıcıdan bağlantı onayı ister (nil ise otomatik kabul).
+	Confirm func(ctx context.Context, remote string) bool
+	// OnSession, oturum başladığında/bittiğinde çağrılır.
+	OnSession func(remote string, active bool)
+	// Video, H.264 için ffmpeg hazırsa yolunu ve kodlayıcıyı döner (nil olabilir).
+	Video VideoInfo
+
+	mu        sync.Mutex
+	active    context.CancelFunc
+	fails     int
+	lockUntil time.Time
+}
+
+type message struct {
+	T     string  `json:"t"`
+	Pw    string  `json:"pw,omitempty"`
+	X     int     `json:"x,omitempty"`
+	Y     int     `json:"y,omitempty"`
+	B     int     `json:"b,omitempty"`
+	D     bool    `json:"d,omitempty"`
+	DX    int     `json:"dx,omitempty"`
+	DY    int     `json:"dy,omitempty"`
+	C     string  `json:"c,omitempty"`
+	V     int     `json:"v,omitempty"`
+	I     int     `json:"i,omitempty"`
+	H264  bool    `json:"h264,omitempty"`
+	Codec string  `json:"codec,omitempty"`
+	TS    float64 `json:"ts,omitempty"`
+	Text  string  `json:"text,omitempty"`
+}
+
+func (s *Server) Handler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws", s.handleWS)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Write([]byte("RemoteDesk host\n"))
+	})
+	return mux
+}
+
+// Kick aktif oturumu sonlandırır.
+func (s *Server) Kick() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.active != nil {
+		s.active()
+	}
+}
+
+func remoteAddr(r *http.Request) string {
+	if ip := r.Header.Get("Cf-Connecting-Ip"); ip != "" {
+		return ip
+	}
+	h, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return h
+}
+
+func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
+	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+		// Viewer farklı bir origin'den (yerel UI) bağlanır; yetkilendirme şifre ile yapılır.
+		InsecureSkipVerify: true,
+		CompressionMode:    websocket.CompressionDisabled,
+	})
+	if err != nil {
+		return
+	}
+	defer c.CloseNow()
+	c.SetReadLimit(maxClipBytes * 3) // pano metni JSON içinde kaçışlı gelebilir
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	remote := remoteAddr(r)
+
+	actx, acancel := context.WithTimeout(ctx, 15*time.Second)
+	var m message
+	err = wsjson.Read(actx, c, &m)
+	acancel()
+	if err != nil || m.T != "auth" {
+		return
+	}
+
+	if wait := s.lockedFor(); wait > 0 {
+		sendErr(ctx, c, "Çok fazla hatalı deneme. Biraz sonra tekrar dene.")
+		return
+	}
+	if !s.Auth(m.Pw) {
+		s.recordFail()
+		log.Printf("hatalı şifre denemesi: %s", remote)
+		time.Sleep(time.Second)
+		sendErr(ctx, c, "Şifre yanlış.")
+		return
+	}
+	s.resetFails()
+
+	if !s.claim(cancel) {
+		sendErr(ctx, c, "Bu bilgisayara şu anda başka biri bağlı.")
+		return
+	}
+	defer s.release()
+
+	if s.Confirm != nil {
+		wsjson.Write(ctx, c, map[string]string{"t": "wait"})
+		if !s.Confirm(ctx, remote) {
+			sendErr(ctx, c, "Bağlantı karşı tarafça reddedildi.")
+			return
+		}
+	}
+
+	log.Printf("oturum başladı: %s", remote)
+	if s.OnSession != nil {
+		s.OnSession(remote, true)
+		defer s.OnSession(remote, false)
+	}
+	sess := newSession(c, s.Video, m.H264)
+	if m.V >= 10 && m.V <= 95 {
+		sess.quality.Store(int32(m.V))
+	}
+	err = sess.run(ctx)
+	log.Printf("oturum bitti: %s (%v)", remote, err)
+	c.Close(websocket.StatusNormalClosure, "")
+}
+
+func sendErr(ctx context.Context, c *websocket.Conn, msg string) {
+	wctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	wsjson.Write(wctx, c, map[string]string{"t": "err", "msg": msg})
+	c.Close(websocket.StatusNormalClosure, "")
+}
+
+func (s *Server) lockedFor() time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return time.Until(s.lockUntil)
+}
+
+func (s *Server) recordFail() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.fails++
+	if s.fails >= 5 {
+		s.fails = 0
+		s.lockUntil = time.Now().Add(time.Minute)
+	}
+}
+
+func (s *Server) resetFails() {
+	s.mu.Lock()
+	s.fails = 0
+	s.mu.Unlock()
+}
+
+func (s *Server) claim(cancel context.CancelFunc) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.active != nil {
+		return false
+	}
+	s.active = cancel
+	return true
+}
+
+func (s *Server) release() {
+	s.mu.Lock()
+	s.active = nil
+	s.mu.Unlock()
+}
