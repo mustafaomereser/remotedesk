@@ -66,15 +66,16 @@
       <div id="warnings"></div>
 
       <div id="sessionBox" class="session hidden">
-        <div class="session-info">
+        <div class="session-head">
           <span class="dot ok"></span>
-          <span>Bağlı: <b id="sessName"></b> <span id="sessRemote" class="muted mono"></span> <span id="sessTime" class="muted"></span></span>
-        </div>
-        <div class="session-acts">
-          <button id="hCall" class="small" title="Bağlanan kişiyle sesli konuş">Sesli görüşme</button>
+          <span id="sessTitle" class="session-title"></span>
+          <span class="spacer"></span>
+          <button id="inkClear" class="small" title="Bağlananların ekrana çizdiklerini sil">Çizimleri sil</button>
+          <button id="hCall" class="small" title="Bağlı herkesle sesli konuş (toplantı)">Sesli görüşme</button>
           <button id="hMute" class="small hidden">Sessize al</button>
-          <button id="kick" class="danger small">Bağlantıyı kes</button>
+          <button id="kick" class="danger small">Hepsini çıkar</button>
         </div>
+        <ul id="sessList" class="sess-list"></ul>
         <div id="hCallBar" class="callbar inbox hidden">
           <span id="hCallText"></span>
           <span class="spacer"></span>
@@ -214,6 +215,20 @@
                 <span class="row-hint">Kopyalanan metin iki bilgisayar arasında aktarılır.</span>
               </span>
               <input type="checkbox" class="switch" id="allowClipboard">
+            </label>
+            <label class="row">
+              <span class="row-text">
+                <span class="row-title">Aynı anda bağlanabilecek kişi</span>
+                <span class="row-hint">Toplantı ve sunum için: herkes aynı ekranı görür, ekrana çizebilir. Fare/klavye iznini kişi başına kapatabilirsin.</span>
+              </span>
+              <select id="maxViewers" class="compact">
+                <option value="1">1 kişi</option>
+                <option value="2">2 kişi</option>
+                <option value="3">3 kişi</option>
+                <option value="5">5 kişi</option>
+                <option value="8">8 kişi</option>
+                <option value="10">10 kişi</option>
+              </select>
             </label>
             <label class="row">
               <span class="row-text">

@@ -12,12 +12,18 @@ import (
 // (SSE), ana pencereden gelenler oturum bağlantısı üzerinden bağlanan kişiye gider.
 // Durum akışından (/api/events) ayrı tutulur: o akış eski durumu atabilir, bu akış atmaz.
 
-func (a *App) pushRTC(msg json.RawMessage) {
+// pushRTC: mesaj, gönderen kişinin oturum numarasıyla sarılır: {"sid":N,"m":{...}}.
+// Ana pencere toplantıda her kişiyle ayrı bir ses bağlantısı kurar.
+func (a *App) pushRTC(sid int, msg json.RawMessage) {
+	b, _ := json.Marshal(struct {
+		SID int             `json:"sid"`
+		M   json.RawMessage `json:"m"`
+	}{sid, msg})
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	for ch := range a.rtcSubs {
 		select {
-		case ch <- msg:
+		case ch <- b:
 		default: // pencere yetişemiyor: bu mesaj kaybolur (görüşme zaman aşımına düşer)
 		}
 	}
@@ -61,11 +67,15 @@ func (a *App) handleRTCEvents(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) handleRTCSend(w http.ResponseWriter, r *http.Request) {
 	b, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 64<<10))
-	if err != nil || !json.Valid(b) {
+	var body struct {
+		SID int             `json:"sid"`
+		M   json.RawMessage `json:"m"`
+	}
+	if err != nil || json.Unmarshal(b, &body) != nil || len(body.M) == 0 {
 		http.Error(w, "geçersiz istek", 400)
 		return
 	}
-	if err := a.host.SendRTC(json.RawMessage(b)); err != nil {
+	if err := a.host.SendRTC(body.SID, body.M); err != nil {
 		http.Error(w, "Bağlı kimse yok.", 409)
 		return
 	}

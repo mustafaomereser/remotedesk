@@ -121,3 +121,16 @@ func runLabel() {
 		}
 	}
 }
+
+// InkAdd, ekrana çizim katmanına bir çizginin yeni noktalarını ekler. Noktalar (x,y çiftleri)
+// masaüstündeki (dx,dy,dw,dh) monitörüne göre 0..10000 arasıdır. laser=true ise çizgi
+// bırakıldıktan kısa süre sonra kaybolur.
+func InkAdd(id string, laser bool, color string, width int, dx, dy, dw, dh int, pts []int, end bool) {
+	inkAdd(id, laser, color, width, dx, dy, dw, dh, pts, end)
+}
+
+// InkRemove, bir çizgiyi siler (geri al).
+func InkRemove(id string) { inkRemove(id) }
+
+// InkClear, tüm çizgileri siler.
+func InkClear() { inkClear() }

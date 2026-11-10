@@ -201,7 +201,7 @@ func (a *App) tunnelIdleLoop(ctx context.Context) {
 			continue
 		}
 		a.mu.Lock()
-		busy := a.st.Session != nil || a.st.Pending != nil
+		busy := len(a.st.Sessions) > 0 || a.st.Pending != nil
 		on := a.st.Tunnel != "off"
 		a.mu.Unlock()
 		if busy {

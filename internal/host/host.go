@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -28,22 +29,26 @@ type Server struct {
 	// Browser, tünel adresinin tarayıcıda açılıp açılamayacağını söyler (nil: kapalı).
 	// Açıksa "/" adresinde şifre soran izleme sayfası (WebFS'teki view.html) sunulur.
 	Browser func() bool
-	// OnRTC, bağlanan kişiden gelen sesli görüşme sinyalini (WebRTC) yerel arayüze iletir.
-	OnRTC func(msg json.RawMessage)
+	// OnRTC, bağlanan kişiden (sid) gelen sesli görüşme sinyalini (WebRTC) yerel arayüze iletir.
+	OnRTC func(sid int, msg json.RawMessage)
 	WebFS fs.FS
 	// Confirm, şifresiz gelen bağlantı isteği için kullanıcıdan onay ister
 	// (nil ise şifresiz istek kabul edilmez).
 	Confirm func(ctx context.Context, remote, name string) bool
-	// OnSession, oturum başladığında/bittiğinde çağrılır.
-	OnSession func(remote, name string, active bool)
+	// OnSession, oturum başladığında/bittiğinde çağrılır (sid: oturum numarası).
+	OnSession func(sid int, remote, name string, active bool)
+	// MaxViewers, aynı anda bağlı olabilecek kişi sayısıdır (nil: 1). Toplantıda herkes
+	// aynı ekranı görür; fare/klavye izni oturum başına kapatılabilir.
+	MaxViewers func() int
 	// Video, H.264 için ffmpeg hazırsa yolunu ve kodlayıcıyı döner (nil olabilir).
 	Video VideoInfo
 	// Concurrent, "aynı anda kullanım" (simülasyon modu) açıksa true döner (nil olabilir).
 	Concurrent func() bool
 
 	mu         sync.Mutex
-	active     context.CancelFunc
-	sess       *session // aktif oturum (sesli görüşme sinyalini iletmek için)
+	sessions   map[int]*member // bağlı kişiler (sid -> oturum)
+	nextSID    int
+	ink        inkStore // ekrana çizimler (sonradan katılana da gönderilir)
 	fails      int
 	lockUntil  time.Time
 	unauthed   int // henüz şifresini göndermemiş bağlantı sayısı
@@ -126,9 +131,16 @@ type message struct {
 	TS    float64         `json:"ts,omitempty"`
 	Text  string          `json:"text,omitempty"`
 	Name  string          `json:"name,omitempty"`
-	Ch    string          `json:"ch,omitempty"`  // tuşun ürettiği karakter (simülasyon modu için)
-	RTC   json.RawMessage `json:"rtc,omitempty"` // sesli görüşme sinyali (WebRTC)
+	Ch    string          `json:"ch,omitempty"`    // tuşun ürettiği karakter (simülasyon modu için)
+	RTC   json.RawMessage `json:"rtc,omitempty"`   // sesli görüşme sinyali (WebRTC)
 	Caret bool            `json:"caret,omitempty"` // dokunmatik: bu tıklamadan sonra yazı alanı kontrolü iste
+	// Ekrana çizim
+	K    int    `json:"k,omitempty"`    // çizgi numarası (izleyiciye göre)
+	Tool string `json:"tool,omitempty"` // pen | laser
+	Col  string `json:"col,omitempty"`
+	Wd   int    `json:"wd,omitempty"`
+	P    []int  `json:"p,omitempty"`
+	E    bool   `json:"e,omitempty"`
 }
 
 // cleanName, viewer'ın gönderdiği adı ekranda gösterilebilir hale getirir.
@@ -225,11 +237,17 @@ func fromBrowser(r *http.Request) bool {
 	return h != "127.0.0.1" && h != "localhost" && h != "::1"
 }
 
-// SendRTC, yerel arayüzden gelen sesli görüşme sinyalini bağlanan kişiye iletir.
-func (s *Server) SendRTC(msg json.RawMessage) error {
-	s.mu.Lock()
-	sess := s.sess
-	s.mu.Unlock()
+// member, bağlı bir kişidir. sess, onay/şifre aşaması bitip oturum başlayınca dolar.
+type member struct {
+	cancel context.CancelFunc
+	sess   *session
+	name   string
+	remote string
+}
+
+// SendRTC, yerel arayüzden gelen sesli görüşme sinyalini sid numaralı kişiye iletir.
+func (s *Server) SendRTC(sid int, msg json.RawMessage) error {
+	sess := s.session(sid)
 	if sess == nil {
 		return errors.New("aktif oturum yok")
 	}
@@ -238,12 +256,94 @@ func (s *Server) SendRTC(msg json.RawMessage) error {
 	return sess.c.WriteJSON(ctx, map[string]any{"t": "rtc", "rtc": msg})
 }
 
-// Kick aktif oturumu sonlandırır.
+func (s *Server) session(sid int) *session {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if m := s.sessions[sid]; m != nil {
+		return m.sess
+	}
+	return nil
+}
+
+// live, oturumu başlamış kişilerdir.
+func (s *Server) live() map[int]*session {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[int]*session, len(s.sessions))
+	for id, m := range s.sessions {
+		if m.sess != nil {
+			out[id] = m.sess
+		}
+	}
+	return out
+}
+
+// Kick tüm oturumları sonlandırır.
 func (s *Server) Kick() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.active != nil {
-		s.active()
+	for _, m := range s.sessions {
+		m.cancel()
+	}
+}
+
+// KickSession, tek bir kişinin bağlantısını keser.
+func (s *Server) KickSession(sid int) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if m := s.sessions[sid]; m != nil {
+		m.cancel()
+		return true
+	}
+	return false
+}
+
+// SetControl, tek bir kişinin fare/klavye iznini açar ya da kapatır (genel izin kapalıysa
+// açmak bir şey değiştirmez).
+func (s *Server) SetControl(sid int, on bool) bool {
+	sess := s.session(sid)
+	if sess == nil {
+		return false
+	}
+	sess.noControl.Store(!on)
+	return true
+}
+
+// broadcast, bir mesajı (except hariç) tüm oturumlara gönderir.
+func (s *Server) broadcast(msg any, except int) {
+	for id, sess := range s.live() {
+		if id == except {
+			continue
+		}
+		go func(sess *session) {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			sess.c.WriteJSON(ctx, msg)
+		}(sess)
+	}
+}
+
+// sendPeople, herkese bağlı kişilerin listesini gönderir (toplantıda kimler var).
+func (s *Server) sendPeople() {
+	type person struct {
+		ID   int    `json:"id"`
+		Name string `json:"name"`
+	}
+	s.mu.Lock()
+	list := []person{}
+	for id, m := range s.sessions {
+		if m.sess != nil {
+			list = append(list, person{id, m.name})
+		}
+	}
+	s.mu.Unlock()
+	sort.Slice(list, func(i, j int) bool { return list[i].ID < list[j].ID })
+	for id, sess := range s.live() {
+		go func(id int, sess *session) {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			sess.c.WriteJSON(ctx, map[string]any{"t": "people", "list": list, "me": id})
+		}(id, sess)
 	}
 }
 
@@ -332,11 +432,16 @@ func (s *Server) serve(c Conn, remote string) {
 		}
 	}
 
-	if !s.claim(cancel) {
-		sendErr(ctx, c, "Bu bilgisayara şu anda başka biri bağlı.")
+	sid, full := s.claim(cancel, name, remote)
+	if full {
+		if s.maxViewers() <= 1 {
+			sendErr(ctx, c, "Bu bilgisayara şu anda başka biri bağlı.")
+		} else {
+			sendErr(ctx, c, "Bu bilgisayara bağlanabilecek kişi sayısı doldu.")
+		}
 		return
 	}
-	defer s.release()
+	defer s.release(sid)
 
 	if request {
 		c.WriteJSON(ctx, map[string]string{"t": "wait"})
@@ -347,23 +452,35 @@ func (s *Server) serve(c Conn, remote string) {
 	}
 
 	log.Printf("oturum başladı: %s (%s, %s)", remote, name, map[string]string{"tunnel": "tünel", "direct": "doğrudan"}[c.Kind()])
-	if s.OnSession != nil {
-		s.OnSession(remote, name, true)
-		defer s.OnSession(remote, name, false)
-	}
 	sess := newSession(c, s.Video, m.H264)
 	sess.name = name
+	sess.sid = sid
+	sess.srv = s
 	sess.concurrent = s.Concurrent
 	sess.perms = s.Perms
-	sess.onRTC = s.OnRTC
+	if s.OnRTC != nil {
+		sess.onRTC = func(msg json.RawMessage) { s.OnRTC(sid, msg) }
+	}
 	s.mu.Lock()
-	s.sess = sess
+	if mb := s.sessions[sid]; mb != nil {
+		mb.sess = sess
+	}
 	s.mu.Unlock()
+	if s.OnSession != nil {
+		s.OnSession(sid, remote, name, true)
+		defer s.OnSession(sid, remote, name, false)
+	}
+	s.sendPeople()
 	defer func() {
+		// Ayrılan kişi listeden düşsün, kalanlara güncel liste gitsin.
 		s.mu.Lock()
-		s.sess = nil
+		if mb := s.sessions[sid]; mb != nil {
+			mb.sess = nil
+		}
 		s.mu.Unlock()
+		s.sendPeople()
 	}()
+	s.ink.replay(ctx, sess)
 	if request {
 		log.Printf("bağlantı isteği kabul edildi: %s", remote)
 	} else {
@@ -384,18 +501,35 @@ func sendErr(ctx context.Context, c Conn, msg string) {
 	c.Close("")
 }
 
-func (s *Server) claim(cancel context.CancelFunc) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.active != nil {
-		return false
+func (s *Server) maxViewers() int {
+	if s.MaxViewers == nil {
+		return 1
 	}
-	s.active = cancel
-	return true
+	return min(max(s.MaxViewers(), 1), 16)
 }
 
-func (s *Server) release() {
+// claim, yeni bir kişi için yer ayırır; yer yoksa full=true.
+func (s *Server) claim(cancel context.CancelFunc, name, remote string) (sid int, full bool) {
+	limit := s.maxViewers()
 	s.mu.Lock()
-	s.active = nil
+	defer s.mu.Unlock()
+	if len(s.sessions) >= limit {
+		return 0, true
+	}
+	if s.sessions == nil {
+		s.sessions = map[int]*member{}
+	}
+	s.nextSID++
+	s.sessions[s.nextSID] = &member{cancel: cancel, name: name, remote: remote}
+	return s.nextSID, false
+}
+
+func (s *Server) release(sid int) {
+	s.mu.Lock()
+	delete(s.sessions, sid)
+	empty := len(s.sessions) == 0
 	s.mu.Unlock()
+	if empty {
+		s.ClearInk() // herkes çıkınca ekrandaki çizimler de silinir
+	}
 }

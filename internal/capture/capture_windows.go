@@ -132,9 +132,9 @@ type Capturer struct {
 	w, h     int
 	frame    Frame
 
-	dx      *dxgiDup
-	dxRetry time.Time
-	dxLog   bool
+	dx    *sharedDup // aynı monitörü izleyen oturumlarla paylaşılır
+	dxSeq uint64
+	dxLog bool
 }
 
 func New() (*Capturer, error) {
@@ -203,34 +203,26 @@ func (c *Capturer) Capture(d Display) (*Frame, error) {
 
 // dxgiCapture, kareyi DXGI ile DIB'e alır. false dönerse çağıran GDI ile devam eder.
 func (c *Capturer) dxgiCapture(d Display) bool {
-	if c.dx != nil && c.dx.display != d {
-		c.dx.close()
+	if c.dx != nil && c.dx.d != d {
+		c.dx.release()
 		c.dx = nil
 	}
 	if c.dx == nil {
-		if time.Now().Before(c.dxRetry) {
-			return false
-		}
-		if c.dx = openDup(d); c.dx == nil {
-			c.dxRetry = time.Now().Add(2 * time.Second)
-			return false
-		}
+		c.dx = acquireDup(d)
+		c.dxSeq = 0
+	}
+	switch c.dx.grab(c.frame.Pix, d.W, d.H, 40*time.Millisecond, &c.dxSeq) {
+	case dxgiNew:
 		if !c.dxLog {
 			c.dxLog = true
 			log.Printf("capture: DXGI Desktop Duplication %dx%d", d.W, d.H)
 		}
-	}
-	switch c.dx.grab(c.frame.Pix, d.W, d.H, 40*time.Millisecond) {
-	case dxgiNew:
 		c.drawCursor(d)
 		procGdiFlush.Call()
 		return true
 	case dxgiSame:
 		return true // ekran ve imleç değişmedi: DIB'deki kare hâlâ geçerli
 	}
-	c.dx.close()
-	c.dx = nil
-	c.dxRetry = time.Now().Add(time.Second)
 	return false
 }
 
@@ -260,7 +252,7 @@ func (c *Capturer) drawCursor(d Display) {
 
 func (c *Capturer) Close() {
 	if c.dx != nil {
-		c.dx.close()
+		c.dx.release()
 		c.dx = nil
 	}
 	c.freeBitmap()

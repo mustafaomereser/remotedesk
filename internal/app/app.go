@@ -50,10 +50,13 @@ type Options struct {
 	Version string
 }
 
+// Session, bu bilgisayara bağlı bir kişidir (toplantıda birden fazla olabilir).
 type Session struct {
-	Name   string `json:"name"`
-	Remote string `json:"remote"`
-	Since  int64  `json:"since"`
+	ID      int    `json:"id"`
+	Name    string `json:"name"`
+	Remote  string `json:"remote"`
+	Since   int64  `json:"since"`
+	Control bool   `json:"control"` // fare/klavye izni (oturum başına)
 }
 
 type Pending struct {
@@ -73,17 +76,18 @@ type Perms struct {
 
 // State, arayüze SSE ile gönderilen anlık durumdur.
 type State struct {
-	Tunnel     string   `json:"tunnel"` // starting | downloading | on | error
-	TunnelMsg  string   `json:"tunnelMsg"`
-	ID         string   `json:"id"`
-	Password   string   `json:"password"`
-	AutoAccept bool     `json:"autoAccept"`
-	Concurrent bool     `json:"concurrent"` // aynı anda kullanım (simülasyon modu)
-	Session    *Session `json:"session"`
-	Pending    *Pending `json:"pending"`
-	Perms      Perms    `json:"perms"`
-	Video      string   `json:"video"` // starting | downloading | on | error
-	VideoMsg   string   `json:"videoMsg"`
+	Tunnel     string    `json:"tunnel"` // starting | downloading | on | error
+	TunnelMsg  string    `json:"tunnelMsg"`
+	ID         string    `json:"id"`
+	Password   string    `json:"password"`
+	AutoAccept bool      `json:"autoAccept"`
+	Concurrent bool      `json:"concurrent"` // aynı anda kullanım (simülasyon modu)
+	Sessions   []Session `json:"sessions"`
+	MaxViewers int       `json:"maxViewers"`
+	Pending    *Pending  `json:"pending"`
+	Perms      Perms     `json:"perms"`
+	Video      string    `json:"video"` // starting | downloading | on | error
+	VideoMsg   string    `json:"videoMsg"`
 
 	// Buluşma sunucusu: kalıcı cihaz ID'si ve bağlantı durumu.
 	DeviceID string `json:"deviceId"`
@@ -184,7 +188,7 @@ func New(o Options) *App {
 	a.host = &host.Server{
 		Auth: a.checkPassword, Confirm: a.confirm, OnSession: a.onSession,
 		Video: a.videoInfo, Concurrent: a.concurrent, Perms: a.permissions,
-		Browser: a.browserAllowed, WebFS: web.FS, OnRTC: a.pushRTC,
+		Browser: a.browserAllowed, WebFS: web.FS, OnRTC: a.pushRTC, MaxViewers: a.maxViewers,
 	}
 	a.peers.load(o.DataDir)
 	if sysutil.PermissionsNeeded() {
@@ -324,18 +328,38 @@ func (a *App) concurrent() bool {
 	return a.set.Concurrent
 }
 
-func (a *App) onSession(remote, name string, active bool) {
+func (a *App) onSession(sid int, remote, name string, active bool) {
 	a.tunnelNeeded.Store(time.Now().UnixNano())
 	if !active {
-		a.pushRTC(json.RawMessage(`{"type":"bye"}`)) // oturum bitti: açık görüşme kapansın
+		a.pushRTC(sid, json.RawMessage(`{"type":"bye"}`)) // oturum bitti: açık görüşme kapansın
 	}
 	a.update(func(s *State) {
+		out := s.Sessions[:0:0]
+		for _, x := range s.Sessions {
+			if x.ID != sid {
+				out = append(out, x)
+			}
+		}
 		if active {
-			s.Session = &Session{Name: name, Remote: remote, Since: time.Now().UnixMilli()}
-		} else {
-			s.Session = nil
+			out = append(out, Session{ID: sid, Name: name, Remote: remote, Since: time.Now().UnixMilli(), Control: true})
+		}
+		s.Sessions = out
+	})
+}
+
+// setSessionControl, tek bir kişinin fare/klavye iznini değiştirir.
+func (a *App) setSessionControl(sid int, on bool) bool {
+	if !a.host.SetControl(sid, on) {
+		return false
+	}
+	a.update(func(s *State) {
+		for i := range s.Sessions {
+			if s.Sessions[i].ID == sid {
+				s.Sessions[i].Control = on
+			}
 		}
 	})
+	return true
 }
 
 func (a *App) confirm(ctx context.Context, remote, name string) bool {
@@ -618,8 +642,35 @@ func (a *App) uiHandler() http.Handler {
 		json.NewEncoder(w).Encode(map[string]string{"name": defaultName()})
 	})
 	mux.HandleFunc("POST /api/host/confirm", a.handleConfirm)
+	mux.HandleFunc("POST /api/host/session", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			ID      int   `json:"id"`
+			Control *bool `json:"control"`
+		}
+		if err := readJSON(r, &body); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		if body.Control != nil && !a.setSessionControl(body.ID, *body.Control) {
+			http.Error(w, "Bu kişi artık bağlı değil.", 404)
+			return
+		}
+		writeOK(w)
+	})
+	mux.HandleFunc("POST /api/host/inkclear", func(w http.ResponseWriter, r *http.Request) {
+		a.host.ClearInk()
+		writeOK(w)
+	})
 	mux.HandleFunc("POST /api/host/kick", func(w http.ResponseWriter, r *http.Request) {
-		a.host.Kick()
+		var body struct {
+			ID int `json:"id"` // 0: herkes
+		}
+		readJSON(r, &body)
+		if body.ID > 0 {
+			a.host.KickSession(body.ID)
+		} else {
+			a.host.Kick()
+		}
 		writeOK(w)
 	})
 	mux.HandleFunc("POST /api/perm/open", func(w http.ResponseWriter, r *http.Request) {
@@ -818,6 +869,11 @@ func writeOK(w http.ResponseWriter) {
 
 func (a *App) openUI() {
 	url := "http://" + a.uiAddr + "/?k=" + a.uiToken
+	if os.Getenv("RD_DEV_UI") == "1" {
+		// Geliştirme / otomatik test: pencere açılmaz, arayüz adresi yazılır.
+		log.Printf("arayüz (geliştirme): %s", url)
+		return
+	}
 	if openNativeWindow(url, a.opts.DataDir, a.Quit) {
 		log.Printf("arayüz uygulama penceresinde açıldı")
 		return

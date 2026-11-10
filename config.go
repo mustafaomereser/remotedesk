@@ -14,8 +14,9 @@ package main
 //   - Cihaz listesi ve çevrimiçi durumu çalışmaz.
 //
 // Adres repoda tutulmaz: derleme sırasında exe'ye eklenir. Kaynak sırasıyla:
-//   1. RD_HUB_SERVER ortam değişkeni
-//   2. proje kökündeki .hubserver dosyası (git'e girmez, .gitignore'da)
+//  1. RD_HUB_SERVER ortam değişkeni
+//  2. proje kökündeki .hubserver dosyası (git'e girmez, .gitignore'da)
+//
 // scripts/build-release.sh ve build.ps1 bunu -ldflags "-X main.HubServer=..." ile yapar.
 // Elle derlerken: go build -ldflags "-X main.HubServer=$(cat .hubserver)" .
 // Kendi sunucunu kurmak için: cd server && npx wrangler deploy, çıkan adresi .hubserver'a yaz.

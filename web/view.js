@@ -349,6 +349,14 @@ function onMessage(ev) {
       case 'caret':
         onCaret(!!m.on);
         break;
+      case 'people':
+        renderPeople(m.list || [], m.me);
+        break;
+      case 'dr':
+      case 'drc':
+      case 'dru':
+        inkMessage(m);
+        break;
       case 'busy': {
         // Karşı taraf bilgisayarı kullanıyor: girişin ya bekletiliyor ya da simülasyon modunda.
         const b = $('busy');
@@ -543,6 +551,8 @@ function renderDisplays(list, cur) {
   });
   sel.value = String(cur);
   sel.classList.toggle('hidden', list.length < 2);
+  inkDisp = cur | 0;
+  inkDirty = true;
 }
 
 $('display').onchange = (e) => {
@@ -664,10 +674,17 @@ canvas.addEventListener('wheel', (e) => {
 // ---- klavye ----
 
 function fromToolbar(e) {
-  return e.target && e.target.closest && (e.target.closest('#bar') || e.target.closest('#vctl') || e.target.id === 'kb' || e.target.closest('#mbar'));
+  return e.target && e.target.closest && (e.target.closest('#bar') || e.target.closest('#vctl') || e.target.id === 'kb' || e.target.closest('#mbar') || e.target.closest('#inkBar'));
 }
 
 window.addEventListener('keydown', (e) => {
+  if (drawMode && (e.key === 'Escape' || ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ'))) {
+    // Çizim modunda Esc çizimi bitirir, Ctrl+Z son çizgiyi geri alır (karşıya gitmez).
+    e.preventDefault();
+    if (e.key === 'Escape') setDrawMode(false);
+    else inkUndo();
+    return;
+  }
   if (!connected || fromToolbar(e) || !e.code || e.code === 'Unidentified') return;
   e.preventDefault();
   pressedKeys.add(e.code);
@@ -1006,3 +1023,225 @@ function setMenu(open) {
 $('menuBtn').onclick = () => setMenu(!document.body.classList.contains('menu-open'));
 $('menuBtn2').onclick = () => setMenu(!document.body.classList.contains('menu-open'));
 $('sheetBg').onclick = () => setMenu(false);
+
+// ---- toplantı: bağlı kişiler ----
+
+let mySid = null;
+function renderPeople(list, me) {
+  mySid = me;
+  const b = $('people');
+  b.classList.toggle('hidden', list.length < 2);
+  b.textContent = `${list.length} kişi`;
+  b.title = 'Bu bilgisayara bağlı olanlar:\n' + list.map((p) => (p.id === me ? p.name + ' (sen)' : p.name)).join('\n');
+}
+
+// ---- ekrana çizim ----
+// Çizgiler görüntüye gömülmez: her izleyici kendi ekranında çizer, karşı bilgisayar da kendi
+// ekranında saydam bir katmanda gösterir. Koordinatlar izlenen monitöre göre 0..10000.
+
+const ink = $('ink');
+const ictx = ink.getContext('2d');
+const strokes = new Map(); // id -> {tool, col, wd, d, p: [x,y,...], e, t (bitiş), n (çizen)}
+let inkDisp = 0;
+let inkDirty = true;
+let drawMode = false;
+let inkTool = 'pen';
+let inkCol = '#ff453a';
+let myK = 0;
+let drawing = null; // {id, k, pending: []}
+const LASER_LIFE = 1500;
+const PEN_WIDTH = 4, LASER_WIDTH = 6;
+
+function setDrawMode(on) {
+  drawMode = on;
+  document.body.classList.toggle('drawing', on);
+  $('inkBar').classList.toggle('hidden', !on);
+  $('drawBtn').classList.toggle('on', on);
+  $('drawBtn').textContent = on ? 'Çizimi bitir' : 'Çiz';
+  if (on) {
+    $('inkBar').style.setProperty('--vbar-h', $('bar').getBoundingClientRect().bottom + 'px');
+    if (typeof setMenu === 'function') setMenu(false);
+  } else {
+    endStroke();
+    canvas.focus();
+  }
+}
+$('drawBtn').onclick = (e) => { e.currentTarget.blur(); if (connected || drawMode) setDrawMode(!drawMode); };
+$('inkDone').onclick = () => setDrawMode(false);
+for (const b of document.querySelectorAll('#inkBar [data-tool]')) {
+  b.onclick = () => {
+    inkTool = b.dataset.tool;
+    for (const x of document.querySelectorAll('#inkBar [data-tool]')) x.classList.toggle('on', x === b);
+  };
+}
+for (const b of document.querySelectorAll('#inkBar [data-col]')) {
+  b.onclick = () => {
+    inkCol = b.dataset.col;
+    for (const x of document.querySelectorAll('#inkBar [data-col]')) x.classList.toggle('on', x === b);
+  };
+}
+function myID(k) { return (mySid == null ? 'me' : mySid) + ':' + k; }
+function inkUndo() {
+  // Yerelde de hemen sil; karşı taraf herkese "dru" gönderir.
+  let last = null;
+  for (const [id, st] of strokes) if (st.mine && st.tool === 'pen') last = id;
+  if (last) { strokes.delete(last); inkDirty = true; }
+  send({ t: 'dru' });
+}
+$('inkUndo').onclick = inkUndo;
+$('inkWipe').onclick = () => { strokes.clear(); inkDirty = true; send({ t: 'drc' }); };
+
+function inkMessage(m) {
+  if (m.t === 'drc') { strokes.clear(); inkDirty = true; return; }
+  if (m.t === 'dru') { strokes.delete(m.id); inkDirty = true; return; }
+  if (typeof m.id !== 'string' || !Array.isArray(m.p)) return;
+  let st = strokes.get(m.id);
+  if (!st) {
+    st = { tool: m.tool, col: m.col, wd: m.wd || PEN_WIDTH, d: m.d | 0, p: [], e: false, t: 0, n: m.n || '' };
+    strokes.set(m.id, st);
+  }
+  for (const v of m.p) st.p.push(v);
+  if (m.e) { st.e = true; st.t = performance.now(); }
+  inkDirty = true;
+}
+
+function normPoint(e) {
+  const r = canvas.getBoundingClientRect();
+  return [
+    Math.round(Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * 10000),
+    Math.round(Math.max(0, Math.min(1, (e.clientY - r.top) / r.height)) * 10000),
+  ];
+}
+
+function flushStroke(end) {
+  if (!drawing) return;
+  if (!drawing.pending.length && !end) return;
+  // Mesaj başına en çok 500 nokta (1000 sayı)
+  while (drawing.pending.length > 1000) {
+    send({ t: 'dr', k: drawing.k, tool: drawing.tool, col: drawing.col, wd: drawing.wd, p: drawing.pending.splice(0, 1000), e: false });
+  }
+  send({ t: 'dr', k: drawing.k, tool: drawing.tool, col: drawing.col, wd: drawing.wd, p: drawing.pending.splice(0), e: !!end });
+}
+setInterval(() => flushStroke(false), 40);
+
+function endStroke() {
+  if (!drawing) return;
+  flushStroke(true);
+  const st = strokes.get(drawing.id);
+  if (st) { st.e = true; st.t = performance.now(); }
+  drawing = null;
+  inkDirty = true;
+}
+
+ink.addEventListener('pointerdown', (e) => {
+  if (!drawMode || !connected) return;
+  if (e.pointerType === 'mouse' && e.button !== 0) return;
+  if (drawing) return; // ikinci parmak: yok say
+  e.preventDefault();
+  ink.setPointerCapture(e.pointerId);
+  myK++;
+  const wd = inkTool === 'laser' ? LASER_WIDTH : PEN_WIDTH;
+  drawing = { id: myID(myK), k: myK, pid: e.pointerId, tool: inkTool, col: inkCol, wd, pending: [] };
+  strokes.set(drawing.id, { tool: inkTool, col: inkCol, wd, d: inkDisp, p: [], e: false, t: 0, mine: true });
+  addPoints(e);
+});
+ink.addEventListener('pointermove', (e) => {
+  if (!drawing || e.pointerId !== drawing.pid) return;
+  e.preventDefault();
+  addPoints(e);
+});
+function addPoints(e) {
+  const st = strokes.get(drawing.id);
+  const list = e.getCoalescedEvents ? e.getCoalescedEvents() : [];
+  for (const ev of list.length ? list : [e]) {
+    const [x, y] = normPoint(ev);
+    const n = st.p.length;
+    if (n >= 2 && Math.abs(st.p[n - 2] - x) + Math.abs(st.p[n - 1] - y) < 4) continue;
+    st.p.push(x, y);
+    drawing.pending.push(x, y);
+  }
+  inkDirty = true;
+}
+const stopDraw = (e) => { if (drawing && e.pointerId === drawing.pid) endStroke(); };
+ink.addEventListener('pointerup', stopDraw);
+ink.addEventListener('pointercancel', stopDraw);
+ink.addEventListener('contextmenu', (e) => e.preventDefault());
+
+// Katmanı görüntünün tam üstüne yerleştir ve gerekiyorsa yeniden çiz.
+let inkRect = '';
+function inkFrame(now) {
+  requestAnimationFrame(inkFrame);
+  const r = canvas.getBoundingClientRect();
+  const sr = $('stage').getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const key = [r.left, r.top, r.width, r.height, sr.left, sr.top, sr.right, sr.bottom, dpr].map(Math.round).join(',');
+  if (key !== inkRect) {
+    inkRect = key;
+    Object.assign(ink.style, { left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px' });
+    // Görüntünün sahne dışında kalan kısmına (kaydırma / yakınlaştırma) çizilmesin.
+    const cl = Math.max(0, sr.left - r.left), ct = Math.max(0, sr.top - r.top);
+    const cr = Math.max(0, r.right - sr.right), cb = Math.max(0, r.bottom - sr.bottom);
+    ink.style.clipPath = `inset(${ct}px ${cr}px ${cb}px ${cl}px)`;
+    ink.width = Math.max(1, Math.round(r.width * dpr));
+    ink.height = Math.max(1, Math.round(r.height * dpr));
+    inkDirty = true;
+  }
+  let fading = false;
+  for (const [id, st] of strokes) {
+    if (st.tool !== 'laser') continue;
+    if (st.e && now - st.t > LASER_LIFE) { strokes.delete(id); inkDirty = true; } else fading = true;
+  }
+  if (!inkDirty && !fading) return;
+  inkDirty = false;
+  drawInk(now);
+}
+requestAnimationFrame(inkFrame);
+
+function drawInk(now) {
+  const W = ink.width, H = ink.height;
+  ictx.clearRect(0, 0, W, H);
+  if (!connected) return;
+  const scale = W / 1600; // kalınlık: 1600 px genişliğe göre
+  ictx.lineCap = 'round';
+  ictx.lineJoin = 'round';
+  for (const st of strokes.values()) {
+    if (st.d !== inkDisp || !st.p.length) continue;
+    const lw = Math.max(2 * (window.devicePixelRatio || 1), st.wd * scale);
+    ictx.save();
+    if (st.tool === 'laser') {
+      const a = st.e ? Math.max(0, 1 - (now - st.t) / LASER_LIFE) : 1;
+      ictx.globalAlpha = a;
+      ictx.shadowColor = st.col;
+      ictx.shadowBlur = 12 * (window.devicePixelRatio || 1);
+    }
+    ictx.strokeStyle = st.col;
+    ictx.fillStyle = st.col;
+    ictx.lineWidth = lw;
+    const X = (v) => v / 10000 * W, Y = (v) => v / 10000 * H;
+    if (st.p.length === 2) {
+      ictx.beginPath();
+      ictx.arc(X(st.p[0]), Y(st.p[1]), lw / 2, 0, Math.PI * 2);
+      ictx.fill();
+    } else {
+      ictx.beginPath();
+      ictx.moveTo(X(st.p[0]), Y(st.p[1]));
+      for (let i = 2; i < st.p.length; i += 2) ictx.lineTo(X(st.p[i]), Y(st.p[i + 1]));
+      ictx.stroke();
+    }
+    // Çizen kişinin adı (başkasının çizgisi sürerken)
+    if (!st.mine && !st.e && st.n) {
+      const n = st.p.length;
+      ictx.globalAlpha = 1;
+      ictx.shadowBlur = 0;
+      const fs = 12 * (window.devicePixelRatio || 1);
+      ictx.font = `600 ${fs}px system-ui, sans-serif`;
+      const tw = ictx.measureText(st.n).width;
+      const x = X(st.p[n - 2]) + 10, y = Y(st.p[n - 1]) + 10;
+      ictx.fillStyle = st.col;
+      ictx.fillRect(x, y, tw + fs, fs * 1.6);
+      ictx.fillStyle = st.col === '#ffffff' || st.col === '#ffd60a' ? '#000' : '#fff';
+      ictx.fillText(st.n, x + fs / 2, y + fs * 1.15);
+    }
+    ictx.restore();
+  }
+}

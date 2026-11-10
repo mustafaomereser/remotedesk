@@ -168,6 +168,7 @@ const (
 	dxgiFail dxgiResult = iota
 	dxgiNew
 	dxgiSame
+	dxgiStale // paylaşımlı kopyalama: bu izleyici için kare yok, bir kez GDI ile alınmalı
 )
 
 // grab, yeni kareyi dst'ye (w×h BGRA, stride w*4) kopyalar. Ekran değişmediyse dxgiSame döner.

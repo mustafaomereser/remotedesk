@@ -16,9 +16,14 @@ const RTC_CONFIG = {
 class VoiceCall {
   // send: sinyal mesajını karşı tarafa iletir. onState(state, info): arayüzü günceller.
   // state: idle | incoming | calling | connecting | active | error
-  constructor({ send, onState }) {
+  // getStream (isteğe bağlı): gönderilecek ses (varsayılan: mikrofon). Toplantıda ana
+  // bilgisayar her kişiye "mikrofon + diğerlerinin sesi" karışımını gönderir.
+  // onTrack (isteğe bağlı): karşı tarafın sesi geldiğinde (karıştırmak için).
+  constructor({ send, onState, getStream, onTrack }) {
     this.send = send;
     this.onState = onState || (() => {});
+    this.getStream = getStream || null;
+    this.onTrack = onTrack || null;
     this.state = 'idle';
     this.pc = null;
     this.stream = null;
@@ -59,6 +64,7 @@ class VoiceCall {
       }
       this.audio.srcObject = e.streams[0];
       this.audio.play().catch(() => {});
+      if (this.onTrack) this.onTrack(e.streams[0]);
     };
     pc.onconnectionstatechange = () => {
       const s = pc.connectionState;
@@ -75,7 +81,7 @@ class VoiceCall {
     if (this.state !== 'idle' && this.state !== 'error') return;
     this.set('calling', 'Karşı tarafın kabul etmesi bekleniyor…');
     try {
-      this.stream = await this.micStream();
+      this.stream = this.getStream ? await this.getStream() : await this.micStream();
       const pc = this.newPeer();
       for (const t of this.stream.getTracks()) pc.addTrack(t, this.stream);
       const offer = await pc.createOffer();
@@ -92,7 +98,7 @@ class VoiceCall {
     if (this.state !== 'incoming' || !this.pendingOffer) return;
     this.set('connecting', 'Bağlanıyor…');
     try {
-      this.stream = await this.micStream();
+      this.stream = this.getStream ? await this.getStream() : await this.micStream();
       const pc = this.newPeer();
       for (const t of this.stream.getTracks()) pc.addTrack(t, this.stream);
       await pc.setRemoteDescription({ type: 'offer', sdp: this.pendingOffer });

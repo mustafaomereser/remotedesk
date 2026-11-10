@@ -103,13 +103,7 @@ function render(s) {
 
   renderPerms(s.perms || {});
 
-  if (s.session) {
-    $('sessionBox').classList.remove('hidden');
-    $('sessName').textContent = s.session.name || '';
-    $('sessRemote').textContent = '(' + s.session.remote + ')';
-  } else {
-    $('sessionBox').classList.add('hidden');
-  }
+  renderSessions(s.sessions || []);
 
   if (s.pending) {
     $('reqName').textContent = s.pending.name || '';
@@ -176,12 +170,64 @@ setInterval(() => {
     const left = Math.max(0, state.pending.expires - Date.now());
     $('reqBar').style.width = (left / 30000) * 100 + '%';
   }
-  if (state.session) {
-    const sec = Math.floor((Date.now() - state.session.since) / 1000);
-    const m = Math.floor(sec / 60), s = sec % 60;
-    $('sessTime').textContent = `· ${m}:${String(s).padStart(2, '0')}`;
+  for (const el of document.querySelectorAll('#sessList [data-since]')) {
+    const sec = Math.floor((Date.now() - +el.dataset.since) / 1000);
+    const m = Math.floor(sec / 60), x = sec % 60;
+    el.textContent = `${m}:${String(x).padStart(2, '0')}`;
   }
 }, 250);
+
+// ---- bağlı kişiler (toplantıda birden fazla) ----
+
+let sessKey = '';
+function renderSessions(list) {
+  $('sessionBox').classList.toggle('hidden', list.length === 0);
+  $('sessTitle').textContent = list.length === 1 ? 'Bağlı: 1 kişi' : `Bağlı: ${list.length} kişi`;
+  $('kick').textContent = list.length > 1 ? 'Hepsini çıkar' : 'Bağlantıyı kes';
+  const key = JSON.stringify(list) + '|' + conf.key();
+  if (key === sessKey) return;
+  sessKey = key;
+  const ul = $('sessList');
+  ul.innerHTML = '';
+  for (const p of list) {
+    const li = document.createElement('li');
+    const who = document.createElement('span');
+    who.className = 'who';
+    const b = document.createElement('b');
+    b.textContent = p.name || 'Uzak kullanıcı';
+    const meta = document.createElement('span');
+    meta.className = 'muted mono';
+    meta.textContent = ' ' + p.remote + ' · ';
+    const t = document.createElement('span');
+    t.className = 'muted';
+    t.dataset.since = p.since;
+    who.append(b, meta, t);
+    const cs = conf.stateOf(p.id);
+    if (cs) {
+      const c = document.createElement('span');
+      c.className = 'call-state';
+      c.textContent = cs === 'active' ? ' · sesli' : cs === 'incoming' ? ' · arıyor' : ' · bağlanıyor';
+      who.append(c);
+    }
+    const ctl = document.createElement('label');
+    ctl.className = 'ctl-toggle';
+    ctl.title = 'Bu kişi fare ve klavyeyi kullanabilsin mi? Kapalıyken yalnızca izler (ve ekrana çizebilir).';
+    const sw = document.createElement('input');
+    sw.type = 'checkbox';
+    sw.className = 'switch';
+    sw.checked = !!p.control && !!(state && state.allowControl);
+    sw.disabled = !(state && state.allowControl);
+    sw.onchange = () => api('host/session', { id: p.id, control: sw.checked }).catch((e) => toast(e.message));
+    ctl.append(document.createTextNode('Kontrol'), sw);
+    const k = document.createElement('button');
+    k.className = 'small';
+    k.textContent = 'Çıkar';
+    k.onclick = () => api('host/kick', { id: p.id });
+    li.append(who, ctl, k);
+    ul.appendChild(li);
+  }
+  conf.syncSessions(list);
+}
 
 // ---- bu bilgisayar ----
 
@@ -206,7 +252,8 @@ $('pwForm').onsubmit = async (e) => {
     toast(err.message);
   }
 };
-$('kick').onclick = () => api('host/kick');
+$('kick').onclick = () => api('host/kick', {});
+$('inkClear').onclick = () => api('host/inkclear').then(() => toast('Çizimler silindi')).catch((e) => toast(e.message));
 
 // ---- ayarlar ----
 
@@ -215,7 +262,10 @@ for (const k of SWITCHES) {
   $(k).onchange = (e) => api('settings', { [k]: e.target.checked }).catch((err) => { toast(err.message); if (state) render(state); });
 }
 
+$('maxViewers').onchange = (e) => api('settings', { maxViewers: +e.target.value }).catch((err) => toast(err.message));
+
 function renderSettings(s) {
+  if (document.activeElement !== $('maxViewers')) $('maxViewers').value = String(s.maxViewers || 5);
   for (const k of SWITCHES) {
     if (document.activeElement !== $(k)) $(k).checked = !!s[k];
   }
@@ -518,61 +568,215 @@ loadPeers();
 setInterval(loadPeers, 5000);
 connectEvents();
 
-// ---- sesli görüşme (bağlanan kişiyle) ----
+// ---- sesli görüşme (toplantı) ----
+// Bu bilgisayar her bağlı kişiyle ayrı bir ses bağlantısı kurar ve her birine
+// "mikrofonum + diğer herkesin sesi" karışımını gönderir: herkes herkesi duyar.
 
-const hcall = new VoiceCall({
-  send: (m) => fetch('/api/rtc', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(m) })
-    .then((r) => { if (!r.ok) throw new Error(); })
-    .catch(() => { hcall.cleanup(); hcall.set('error', 'Bağlı kimse yok.'); }),
-  onState: renderHostCall,
-});
+class Conference {
+  constructor() {
+    this.on = false;
+    this.calls = new Map(); // sid -> {call, dest, src}
+    this.ctx = null;
+    this.mic = null;
+    this.micGain = null;
+    this.muted = false;
+    this.incoming = null; // görüşme kapalıyken gelen ilk arama (sid)
+    this.known = new Set(); // görülmüş oturumlar: yalnızca sonradan katılan aranır
+  }
 
-function renderHostCall(state, info) {
-  const btn = $('hCall');
-  btn.classList.toggle('danger', state === 'calling' || state === 'connecting' || state === 'active');
-  btn.textContent = state === 'calling' ? 'Aramayı iptal et'
-    : state === 'connecting' || state === 'active' ? 'Görüşmeyi kapat'
-    : 'Sesli görüşme';
-  btn.classList.toggle('hidden', state === 'incoming');
-  $('hMute').classList.toggle('hidden', state !== 'active');
-  if (state !== 'active') $('hMute').textContent = 'Sessize al';
-  const bar = $('hCallBar');
-  if (state === 'incoming') {
-    const who = (state && window.state && window.state.session && window.state.session.name) || 'Bağlanan kişi';
-    $('hCallText').textContent = who + ' sesli görüşme başlatmak istiyor.';
-    $('hAccept').classList.remove('hidden');
-    $('hReject').textContent = 'Reddet';
-    bar.classList.remove('hidden');
-    try { new Notification('RemoteDesk', { body: $('hCallText').textContent }); } catch {}
-  } else if (info && (state === 'error' || state === 'idle' || state === 'calling')) {
-    $('hCallText').textContent = info;
-    $('hAccept').classList.add('hidden');
-    $('hReject').textContent = state === 'calling' ? 'İptal' : 'Tamam';
-    bar.classList.remove('hidden');
-    if (state !== 'calling') setTimeout(() => { if (hcall.state === state) bar.classList.add('hidden'); }, 6000);
-  } else {
-    bar.classList.add('hidden');
+  key() {
+    return [...this.calls].map(([sid, c]) => sid + c.call.state).join(',') + (this.on ? '+' : '-');
+  }
+  stateOf(sid) {
+    const c = this.calls.get(sid);
+    if (!c || c.call.state === 'idle' || c.call.state === 'error') return '';
+    return c.call.state === 'active' ? 'active' : c.call.state === 'incoming' ? 'incoming' : 'connecting';
+  }
+
+  async ensureAudio() {
+    if (this.ctx) return;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('Bu pencerede mikrofon kullanılamıyor.');
+    let mic;
+    try {
+      mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false });
+    } catch (e) {
+      throw new Error(e && e.name === 'NotAllowedError' ? 'Mikrofon izni verilmedi.' : 'Mikrofon açılamadı.');
+    }
+    this.ctx = new AudioContext();
+    this.mic = mic;
+    this.micGain = this.ctx.createGain();
+    this.ctx.createMediaStreamSource(mic).connect(this.micGain);
+  }
+
+  // streamFor: sid'ye gönderilecek karışım (mikrofon + o kişi hariç herkes).
+  streamFor(sid) {
+    const dest = this.ctx.createMediaStreamDestination();
+    this.micGain.connect(dest);
+    for (const [other, c] of this.calls) if (other !== sid && c.src) c.src.connect(dest);
+    this.calls.get(sid).dest = dest;
+    return dest.stream;
+  }
+
+  addRemote(sid, stream) {
+    const me = this.calls.get(sid);
+    if (!me || !this.ctx) return;
+    if (me.src) try { me.src.disconnect(); } catch {}
+    me.src = this.ctx.createMediaStreamSource(stream);
+    for (const [other, c] of this.calls) if (other !== sid && c.dest) me.src.connect(c.dest);
+  }
+
+  entry(sid) {
+    let e = this.calls.get(sid);
+    if (e) return e;
+    const call = new VoiceCall({
+      send: (m) => fetch('/api/rtc', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sid, m }) })
+        .then((r) => { if (!r.ok) throw new Error(); })
+        .catch(() => { call.cleanup(); this.drop(sid); }),
+      onState: (st, info) => this.onCallState(sid, st, info),
+      getStream: async () => { await this.ensureAudio(); return this.streamFor(sid); },
+      onTrack: (stream) => this.addRemote(sid, stream),
+    });
+    e = { call, dest: null, src: null };
+    this.calls.set(sid, e);
+    return e;
+  }
+
+  drop(sid) {
+    const e = this.calls.get(sid);
+    if (!e) return;
+    if (e.src) try { e.src.disconnect(); } catch {}
+    this.calls.delete(sid);
+    if (this.incoming === sid) this.incoming = null;
+    this.render();
+  }
+
+  onCallState(sid, st, info) {
+    if (st === 'idle' || st === 'error') {
+      this.drop(sid);
+      if (st === 'error' && info) toast(info);
+    }
+    this.render();
+  }
+
+  // start: herkesi arar (görüşmeyi bu bilgisayar başlatır).
+  async start() {
+    try {
+      await this.ensureAudio();
+    } catch (e) {
+      toast(e.message);
+      return;
+    }
+    this.on = true;
+    for (const p of (state && state.sessions) || []) {
+      const e = this.entry(p.id);
+      if (e.call.state === 'idle') e.call.start();
+      else if (e.call.state === 'incoming') e.call.accept();
+    }
+    this.render();
+  }
+
+  async acceptIncoming() {
+    const sid = this.incoming;
+    this.incoming = null;
+    try {
+      await this.ensureAudio();
+    } catch (e) {
+      toast(e.message);
+      if (sid != null && this.calls.get(sid)) this.calls.get(sid).call.reject();
+      return;
+    }
+    this.on = true;
+    if (sid != null && this.calls.get(sid)) this.calls.get(sid).call.accept();
+    this.render();
+  }
+
+  rejectIncoming() {
+    const sid = this.incoming;
+    this.incoming = null;
+    if (sid != null && this.calls.get(sid)) this.calls.get(sid).call.reject();
+    this.render();
+  }
+
+  hangup() {
+    for (const [, e] of this.calls) e.call.hangup();
+    this.calls.clear();
+    this.on = false;
+    this.incoming = null;
+    if (this.mic) for (const t of this.mic.getTracks()) t.stop();
+    if (this.ctx) this.ctx.close().catch(() => {});
+    this.ctx = this.mic = this.micGain = null;
+    this.muted = false;
+    this.render();
+  }
+
+  toggleMute() {
+    this.muted = !this.muted;
+    if (this.micGain) this.micGain.gain.value = this.muted ? 0 : 1;
+    return this.muted;
+  }
+
+  handle(sid, m) {
+    if (!m || typeof m.type !== 'string') return;
+    if (m.type === 'offer') {
+      const e = this.entry(sid);
+      e.call.handle(m).then(() => {
+        if (this.on) e.call.accept(); // görüşme açık: katılmak isteyen doğrudan girer
+        else if (this.incoming == null) this.incoming = sid;
+        else e.call.reject();
+        this.render();
+      });
+      return;
+    }
+    const e = this.calls.get(sid);
+    if (e) e.call.handle(m);
+  }
+
+  // Yeni katılan kişi: görüşme açıksa o da aranır; ayrılan kişinin bağlantısı kapanır.
+  syncSessions(list) {
+    const ids = new Set(list.map((p) => p.id));
+    for (const sid of [...this.calls.keys()]) if (!ids.has(sid)) { this.calls.get(sid).call.cleanup(); this.drop(sid); }
+    for (const p of list) {
+      if (this.known.has(p.id)) continue;
+      this.known.add(p.id);
+      if (this.on && !this.calls.has(p.id)) this.entry(p.id).call.start();
+    }
+  }
+
+  render() {
+    const btn = $('hCall');
+    const active = this.on;
+    btn.classList.toggle('danger', active);
+    btn.textContent = active ? 'Görüşmeyi kapat' : 'Sesli görüşme';
+    $('hMute').classList.toggle('hidden', !active);
+    if (!active) $('hMute').textContent = 'Sessize al';
+    const bar = $('hCallBar');
+    if (this.incoming != null) {
+      const p = ((state && state.sessions) || []).find((x) => x.id === this.incoming);
+      $('hCallText').textContent = (p ? p.name : 'Bağlanan kişi') + ' sesli görüşme başlatmak istiyor.';
+      $('hAccept').classList.remove('hidden');
+      $('hReject').textContent = 'Reddet';
+      bar.classList.remove('hidden');
+      try { new Notification('RemoteDesk', { body: $('hCallText').textContent }); } catch {}
+    } else {
+      bar.classList.add('hidden');
+    }
+    if (state) renderSessions(state.sessions || []);
   }
 }
 
-$('hCall').onclick = () => {
-  if (hcall.state === 'idle' || hcall.state === 'error') hcall.start();
-  else hcall.hangup();
-};
-$('hMute').onclick = (e) => { e.target.textContent = hcall.toggleMute() ? 'Sesi aç' : 'Sessize al'; };
-$('hAccept').onclick = () => hcall.accept();
-$('hReject').onclick = () => {
-  if (hcall.state === 'incoming') hcall.reject();
-  else if (hcall.state === 'calling') hcall.hangup();
-  $('hCallBar').classList.add('hidden');
-};
+const conf = new Conference();
+
+$('hCall').onclick = () => { if (conf.on) conf.hangup(); else conf.start(); };
+$('hMute').onclick = (e) => { e.target.textContent = conf.toggleMute() ? 'Sesi aç' : 'Sessize al'; };
+$('hAccept').onclick = () => conf.acceptIncoming();
+$('hReject').onclick = () => conf.rejectIncoming();
 
 (function rtcEvents() {
   const es = new EventSource('/api/rtc/events');
   es.onmessage = (e) => {
     let m;
     try { m = JSON.parse(e.data); } catch { return; }
-    hcall.handle(m);
+    if (m && typeof m.sid === 'number') conf.handle(m.sid, m.m);
   };
 })();
 

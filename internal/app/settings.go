@@ -27,6 +27,7 @@ type Settings struct {
 	AllowControl   bool `json:"allowControl"`   // bağlanan kişi fare/klavye kullanabilir
 	AllowClipboard bool `json:"allowClipboard"` // pano paylaşımı
 	AllowBrowser   bool `json:"allowBrowser"`   // tünel adresi tarayıcıda açılabilir (şifreyle)
+	MaxViewers     int  `json:"maxViewers"`     // aynı anda bağlanabilecek kişi (0: varsayılan)
 
 	// Sabit şifre (gözetimsiz erişim): yalnızca PBKDF2 özeti saklanır.
 	FixedHash string `json:"fixedHash,omitempty"`
@@ -67,6 +68,22 @@ func (a *App) syncStateLocked() {
 	a.st.AllowClipboard = a.set.AllowClipboard
 	a.st.FixedPassword = a.set.FixedHash != ""
 	a.st.AllowBrowser = a.set.AllowBrowser
+	a.st.MaxViewers = a.maxViewersLocked()
+}
+
+const defaultMaxViewers = 5
+
+func (a *App) maxViewersLocked() int {
+	if a.set.MaxViewers <= 0 {
+		return defaultMaxViewers
+	}
+	return min(a.set.MaxViewers, 10)
+}
+
+func (a *App) maxViewers() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.maxViewersLocked()
 }
 
 func fixedHash(pw, saltHex string) string {
@@ -146,6 +163,7 @@ func (a *App) handleSettings(w http.ResponseWriter, r *http.Request) {
 		AllowControl   *bool `json:"allowControl"`
 		AllowClipboard *bool `json:"allowClipboard"`
 		AllowBrowser   *bool `json:"allowBrowser"`
+		MaxViewers     *int  `json:"maxViewers"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		http.Error(w, err.Error(), 400)
@@ -163,6 +181,9 @@ func (a *App) handleSettings(w http.ResponseWriter, r *http.Request) {
 	set(&a.set.AllowControl, body.AllowControl)
 	set(&a.set.AllowClipboard, body.AllowClipboard)
 	set(&a.set.AllowBrowser, body.AllowBrowser)
+	if body.MaxViewers != nil {
+		a.set.MaxViewers = min(max(*body.MaxViewers, 1), 10)
+	}
 	a.saveSettingsLocked()
 	a.syncStateLocked()
 	a.broadcastLocked()

@@ -50,6 +50,10 @@ type session struct {
 	concurrent func() bool // "aynı anda kullanım" açık mı
 	perms      func() Perms
 	onRTC      func(json.RawMessage)
+	sid        int                         // sunucudaki oturum numarası
+	srv        *Server                     // çizim ve katılımcı yayını için
+	noControl  atomic.Bool                 // bu kişinin fare/klavye izni ana kullanıcı tarafından kapatıldı
+	view       atomic.Pointer[viewDisplay] // şu an izlenen monitör (çizim koordinatları için)
 	statSent   bool
 	lastPerms  Perms
 	lastSecure bool
@@ -94,10 +98,14 @@ func newSession(c Conn, vi VideoInfo, wantH264 bool) *session {
 
 // allowed, bağlanan kişinin o anki izinleridir (Perms ayarlı değilse her şey serbest).
 func (s *session) allowed() Perms {
-	if s.perms == nil {
-		return Perms{Control: true, Clipboard: true}
+	p := Perms{Control: true, Clipboard: true}
+	if s.perms != nil {
+		p = s.perms()
 	}
-	return s.perms()
+	if s.noControl.Load() {
+		p.Control = false
+	}
+	return p
 }
 
 func (s *session) pokeLoop() {
@@ -241,6 +249,10 @@ func (s *session) readLoop(ctx context.Context) {
 			}
 		case "ping":
 			s.c.WriteJSON(ctx, map[string]any{"t": "pong", "ts": m.TS})
+		case "dr", "drc", "dru":
+			if s.srv != nil {
+				s.srv.handleInk(s, &m)
+			}
 		case "rtc":
 			if s.onRTC != nil && len(m.RTC) > 0 && len(m.RTC) < 64<<10 {
 				s.onRTC(m.RTC)
@@ -519,7 +531,14 @@ func (s *session) streamLoop(ctx context.Context) error {
 	}
 }
 
+// viewDisplay, izlenen monitörün sırası ve masaüstündeki yeridir.
+type viewDisplay struct {
+	idx int
+	d   capture.Display
+}
+
 func (s *session) setMapping(d capture.Display, w, h int) {
+	s.view.Store(&viewDisplay{s.cur, d})
 	s.in.SetMapping(input.Mapping{
 		OX: float64(d.X), OY: float64(d.Y),
 		SX: float64(d.W) / float64(w), SY: float64(d.H) / float64(h),
