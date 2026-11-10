@@ -1,80 +1,119 @@
 # RemoteDesk
 
-AnyDesk benzeri, Go ile yazılmış uzak masaüstü. Bağlantı, Cloudflare **quick tunnel** (trycloudflare.com) üzerinden kurulur: hesap, domain ya da port açma gerekmez.
+AnyDesk benzeri, Go ile yazılmış uzak masaüstü (Windows ve macOS). Bilgisayarlar mümkünse **doğrudan** (WebRTC) bağlanır; ağ engeli varsa Cloudflare **quick tunnel** üzerinden. Hesap, domain ya da port açma gerekmez.
 
 ## Kullanım
 
-`RemoteDesk.exe` dosyasını çalıştır. Uygulama:
+`RemoteDesk.exe`yi (macOS'ta `RemoteDesk.app`) aç. Ana pencerede bu bilgisayarın **ID**'si ve tek kullanımlık **şifresi** görünür.
 
-1. Ekranı yayınlayan host sunucusunu başlatır (sadece 127.0.0.1).
-2. `cloudflared` ile bir quick tunnel açar (cloudflared yoksa otomatik indirir).
-3. Tünel adresinin alt alan adını **ID** olarak gösterir, rastgele bir **şifre** üretir.
+- **Bağlanmak:** Karşı tarafın ID'sini gir. Şifreyi biliyorsan doğrudan bağlanırsın. Şifre alanını boş bırakırsan karşı tarafa bir **bağlantı isteği** gider; onaylarsa bağlanırsın.
+- **Gözetimsiz erişim:** Ayarlar > Sabit şifre. Bu şifreyle gelen kişi onay beklemeden bağlanır. Şifrenin kendisi saklanmaz, yalnızca PBKDF2 özeti tutulur.
+- **Tarayıcıdan erişim** (isteğe bağlı, Ayarlar > Erişim): Bağlantı adresi telefon ya da başka bir bilgisayarın tarayıcısında açılabilir. Şifre sorulur; telefonda dokunmatik kontrol ve telefon klavyesi çalışır.
 
-Bağlanacak kişi kendi RemoteDesk'inde bu ID'yi ve şifreyi girip **Bağlan**'a basar. Host tarafında onay penceresi çıkar.
+## Özellikler
 
-> Quick tunnel ID'si uygulama her açıldığında (ve tünel koparsa) değişir.
+### Bağlantı
+- **Kalıcı ID** (buluşma sunucusu ayarlıysa): 9 haneli numara ya da seçtiğin bir ad (ör. `mustafa-pc`). Kayıtlı cihazlar, favoriler ve kimin çevrimiçi olduğu listede görünür.
+- **Doğrudan bağlantı:**
+  - Görüntü, klavye/fare ve ses WebRTC veri kanallarıyla iki bilgisayar arasında doğrudan akar.
+  - Buluşma sunucusundan yalnızca tek bir el sıkışma mesajı geçer.
+  - Kurulamazsa tünel (WebSocket) kullanılır.
+  - İzleme penceresinin durum satırında hangisinin kullanıldığı yazar ("Doğrudan" / "Tünel").
+- **Birden fazla bağlantı:** Her cihaz ayrı bir pencerede açılır, aralarında geçiş yapılabilir. Bir gruba ya da takıma **toplu bağlanılabilir**.
+
+### Takımlar ve gruplar
+- **Takım:** Cihazlar > Takım oluştur. Davet kodunu bilen bilgisayar takıma katılır. Takımdakiler birbirinin cihazlarını ve hangisinin açık olduğunu görür. Bağlanmak için yine şifre ya da onay gerekir. Takımın sahibi üye çıkarabilir, kodu yenileyebilir, takımı silebilir.
+- **Grup:** Kendi cihaz listende her cihaza bir grup adı verebilirsin (ör. "Ofis", "Ev"). Liste gruplara ayrılır.
+
+### Toplantı ve sunum
+- **Çok kişili bağlantı:**
+  - Aynı bilgisayara birden fazla kişi aynı anda bağlanabilir; kişi sayısı Ayarlar'dan seçilir.
+  - Ana pencerede bağlı kişiler listelenir.
+  - Fare/klavye izni kişi başına kapatılabilir ve her kişi ayrı ayrı çıkarılabilir.
+- **Ekrana çizim:**
+  - Bağlanan herkes kalemle çizebilir ya da lazer işaretçi kullanabilir; 5 renk, geri al ve hepsini sil var.
+  - Çizgiler herkeste ve bağlanılan bilgisayarın ekranında görünür.
+  - Windows'ta bağlanılan bilgisayardaki çizim katmanı ekran yakalamaya girmez, yani görüntüde iki kez çıkmaz.
+- **Sesli görüşme:**
+  - WebRTC ile, mikrofon izni ister.
+  - Toplantıda bağlanılan bilgisayar herkesin sesini birleştirir, herkes herkesi duyar.
+
+### Görüntü
+- **Ekran yakalama:**
+  - Windows'ta **DXGI Desktop Duplication**; aynı monitörü izleyenler tek kopyalamayı paylaşır. Kullanılamazsa GDI'a düşülür.
+  - macOS'ta `CGDisplayStream`.
+- **H.264 (ffmpeg):**
+  - Donanım kodlayıcı sırayla denenir: NVENC → Quick Sync → AMF → x264 → Media Foundation; macOS'ta VideoToolbox → x264.
+  - Uyarlamalı bit hızı: 1,5–20 Mbps arası, bağlantıya göre ayarlanır.
+  - İzleyici WebCodecs ile çözer; desteklenmiyorsa JPEG karolar kullanılır.
+- **Çoklu monitör, pano senkronu, tam ekran** (tam ekranda Win/Alt+Tab da karşıya gider).
+
+### Telefon ve tablet
+- **Dokunmatik kontrol:**
+  - Dokun = tık, iki parmakla dokun = sağ tık, tek parmakla sürükle = sürükle-bırak.
+  - İki parmakla kaydır = tekerlek, sıkıştır = yakınlaştır.
+- **Telefon klavyesi:**
+  - Sağ alttaki düğmeyle açılır; Türkçe karakterler dahil yazar.
+  - Windows'ta bir yazı alanına dokununca Android'de kendiliğinden açılır.
+  - iPhone klavyeyi yalnızca dokunuş anında açtırdığı için orada düğme kullanılır.
+
+### Diğer
+- **Aynı anda kullanım** (deneysel): Bağlanan kişi kendi hayalet imleciyle çalışır, ana kullanıcının imleci oynamaz. Kapalıyken ana kullanıcı fareye dokununca kontrol ona geçer ve uzaktaki kişinin imleci adıyla gösterilir.
+- **UAC:** Windows'ta "Yönetici olarak yeniden başlat" ile UAC pencereleri de kontrol edilebilir. Güvenli masaüstü açıkken izleyiciye uyarı gösterilir.
+- **Güncelleme:** GitHub sürümleri denetlenir, tek tıkla kurulur (SHA-256 doğrulamalı).
+
+## Sunuculu / sunucusuz mod
+
+`config.go` içindeki `HubServer` doluysa uygulama **buluşma sunucusunu** kullanır: kalıcı ID, cihaz listesi, takımlar, doğrudan bağlantı el sıkışması. Boşsa **sunucusuz** çalışır: ID tünel adresidir ve her açılışta değişir.
+
+Sunucu adresi repoda tutulmaz; derlemede `-ldflags "-X main.HubServer=..."` ile eklenir. Kaynak sırası: önce `RD_HUB_SERVER` ortam değişkeni, sonra proje kökündeki `.hubserver` dosyası (git'e girmez).
+
+Kendi sunucunu kurmak için (Cloudflare Workers, ücretsiz katman yeterli):
+
+```bash
+cd server && npx wrangler deploy     # çıkan adresi .hubserver dosyasına yaz
+```
+
+Sunucudan görüntü, klavye/fare ya da şifre geçmez. Sunucu yalnızca kimin çevrimiçi olduğunu bilir, el sıkışmayı iletir ve takım listelerini tutar. Çevrimiçi bilgisi sorgulanmaz; değişince sunucu bildirir. Böylece istek kotası korunur.
 
 ### Komut satırı seçenekleri (`RemoteDesk-console.exe`)
 
 | Seçenek | Açıklama |
 |---|---|
 | `-headless` | Pencere açmaz, ID ve şifreyi konsola yazar |
-| `-autoaccept` | Onay sormadan kabul eder (headless modda gerekli) |
+| `-autoaccept` | Şifresiz istekleri onay sormadan kabul eder (headless modda gerekli) |
 | `-password X` | Sabit şifre |
 | `-notunnel` | Tünel açmaz, sadece `127.0.0.1:port` (yerel test) |
+| `-server URL` | Buluşma sunucusu (boş: sunucusuz mod) |
+| `-concurrent` | Aynı anda kullanımı açık başlat |
 
 ## Mimari
 
 ```
-[Viewer penceresi] --wss--> xxx.trycloudflare.com --> cloudflared --> 127.0.0.1:host --> yakalama + SendInput
-       ^
-  Yerel UI (127.0.0.1:47800, Edge --app penceresi) — tünele ASLA açılmaz
+                 buluşma sunucusu (Workers + Durable Object): çevrimiçi durumu, el sıkışma, takımlar
+                        ^                                   ^
+[İzleme penceresi] ==== WebRTC (doğrudan) =============== [Host: yakalama + kodlama + giriş]
+        \--- wss --> xxx.trycloudflare.com --> cloudflared --/   (yedek yol)
+Yerel arayüz (127.0.0.1, çerez anahtarlı) tünele ASLA açılmaz.
 ```
 
-- `internal/capture`: GDI BitBlt ile ekran yakalama, imleç görüntüye çizilir.
-- `internal/host`: WebSocket oturumu, şifre doğrulama (5 hatalı denemede 1 dk kilit), 64×64 karo farkı + paralel JPEG kodlama, ack tabanlı akış kontrolü (en fazla 30 fps).
-- `internal/input`: `SendInput` ile fare ve klavye. Klavye **scancode** gönderir, yani karakter karşı tarafın klavye düzenine göre oluşur.
-- `internal/tunnel`: cloudflared'ı bulma/indirme/başlatma. `~/.cloudflared/config.yml` çakışmasın diye ayrı bir HOME kullanır. Job object sayesinde uygulama kapanınca cloudflared da kapanır.
-- `internal/app`: durum yönetimi, SSE, onay akışı, Edge/Chrome uygulama penceresi.
-- `web/`: gömülü arayüz (ana pencere + viewer).
+| Paket | İçerik |
+|---|---|
+| `internal/host` | Oturumlar (bağlantı türünden bağımsız `Conn`), şifre ve onay, çok kişili oturum, çizim, akış kontrolü, WebRTC |
+| `internal/capture` | DXGI / GDI / CGDisplayStream yakalama |
+| `internal/input` | `SendInput` / CGEvent; klavye scancode ile, telefon metni Unicode olarak |
+| `internal/desktop` | Ad etiketi ve çizim katmanı (saydam, tıklamayı geçiren pencereler), WebView |
+| `internal/hub` | Buluşma sunucusu istemcisi (tek kalıcı bağlantı, takım işlemleri) |
+| `internal/app` | Durum, ayarlar, yerel API, cihaz listesi, güncelleme |
+| `server/` | Buluşma sunucusu (Cloudflare Worker) |
+| `web/` | Gömülü arayüz: ana pencere ve izleme penceresi |
 
-### Protokol (WebSocket `/ws`)
+## Bilinen sınırlar
 
-Viewer'dan host'a (JSON): `auth{pw,h264,v}`, `ack`, `vack`, `kf`, `codec{codec}`, `disp{i}`, `clip{text}`, `mm{x,y}`, `mb{b,d,x,y}`, `wh{dx,dy}`, `k{c,d}`, `q{v}`, `ping{ts}`
-Host'tan viewer'a (JSON): `wait`, `mode{v,enc}`, `displays{list,cur}`, `init{w,h}`, `clip{text}`, `notice{msg}`, `err{msg}`, `pong{ts}`
-Host'tan viewer'a (binary): `[1][x][y][w][h][jpeg]` dikdörtgen, `[2]` kare sonu, `[3][anahtar?][H.264 Annex B]` video karesi.
-
-## macOS
-
-```bash
-chmod +x RemoteDesk-macos-arm64          # Intel Mac için: RemoteDesk-macos-amd64
-xattr -dr com.apple.quarantine RemoteDesk-macos-arm64
-./RemoteDesk-macos-arm64
-```
-
-- İlk açılışta macOS **Ekran Kaydı** ve **Erişilebilirlik** izinlerini ister. Terminal'den çalıştırıyorsan izinler Terminal'e verilir. İzinleri verdikten sonra uygulamayı yeniden başlat. Eksik izinler arayüzde sarı uyarı olarak görünür.
-- Pencere Chrome/Edge/Brave varsa uygulama modunda açılır, yoksa Safari'de açılır.
-- Ekran yakalama `CGDisplayCreateImage` ile yapılır (cgo yok, `purego` kullanılıyor). macOS'ta imleç görüntüye çizilmez.
-- Klavye fiziksel tuş eşlemesiyle çalışır: Windows'tan bağlanınca Win tuşu ⌘ (Command) olarak gider.
-
-## Özellikler
-
-- **H.264 (ffmpeg):** Uygulama açılışta ffmpeg'i arar (PATH, Homebrew, uygulama klasörü). Bulamazsa indirir: Windows'ta gyan.dev (SHA-256 doğrulamalı), macOS'ta martin-riedl.de / evermeet.cx. Ardından sırayla NVENC → Quick Sync → AMF → x264 → Media Foundation (macOS'ta VideoToolbox → x264) denenir ve çalışan ilk kodlayıcı seçilir.
-  - Ekranı ffmpeg yakalamaz. Kareler uygulamanın kendi yakalama kodundan ffmpeg'e ham BGRA olarak verilir. Bu sayede monitör seçimi ve imleç çizimi aynı kalır, ekran değişmezken kare de gönderilmez.
-  - Ekran durduktan sonra 12 kare daha gönderilir, böylece görüntü kalitesi netleşir.
-  - Akış kontrolü: viewer'ın çözmediği kare sayısı 3'ü geçemez (`vack`).
-  - Viewer, H.264'ü tarayıcının WebCodecs `VideoDecoder`'ı ile çözer. Desteklenmiyorsa ya da ffmpeg hazır değilse JPEG kullanılır. Araç çubuğundan elle de geçilebilir.
-
-- **Çoklu monitör:** Viewer araç çubuğunda monitör seçici var (birden fazla ekran olduğunda görünür).
-- **Pano:** Metin iki yönde de senkronize olur ("Pano" kutusu). Viewer kendi bilgisayarının panosuna yerel uygulama üzerinden erişir, tarayıcı izni gerekmez.
-
-## Bilinen sınırlar / yapılacaklar
-
-- UAC ve kilit ekranı (secure desktop) görünmez. Bunun için servis olarak (SYSTEM) çalışmak gerekiyor.
-- Ctrl+Alt+Del gönderilemiyor.
-- Pano sadece düz metin; dosya transferi ve ses yok.
-- Ekran yakalama hâlâ GDI / CGDisplayCreateImage. DXGI Desktop Duplication / ScreenCaptureKit ile CPU kullanımı düşürülebilir.
-- Trafik cloudflared ile TLS'li, ama uçtan uca ek bir şifreleme katmanı yok (Cloudflare trafiği görebilir).
+- Kilit ekranı ve Ctrl+Alt+Del: servis (SYSTEM) olarak çalışmak gerekir; şimdilik yok.
+- Dosya transferi yok; pano yalnızca düz metin.
+- macOS'ta bağlanılan bilgisayarın ekranında çizim katmanı ve yazı alanı algılama henüz yok. Çizimler izleyicilerde görünür.
+- Doğrudan bağlantı STUN ile kurulur; simetrik NAT gibi zor ağlarda tünel kullanılır (TURN yok).
 
 ## Derleme
 
