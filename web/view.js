@@ -346,6 +346,9 @@ function onMessage(ev) {
       case 'hstat':
         hostStat = m;
         break;
+      case 'caret':
+        onCaret(!!m.on);
+        break;
       case 'busy': {
         // Karşı taraf bilgisayarı kullanıyor: girişin ya bekletiliyor ya da simülasyon modunda.
         const b = $('busy');
@@ -806,7 +809,7 @@ $('callReject').onclick = () => {
 window.addEventListener('beforeunload', () => call.hangup());
 
 // ---- dokunmatik ekran (telefon / tablet) ----
-//   dokun = sol tık · basılı tut = sağ tık · tek parmakla sürükle = sürükle-bırak
+//   dokun = sol tık · iki parmakla dokun = sağ tık · tek parmakla sürükle = sürükle-bırak
 //   iki parmakla kaydır = fare tekerleği (yakınlaştırılmışsa görüntüyü gezdirir)
 //   iki parmakla sıkıştır = yakınlaştır / uzaklaştır
 
@@ -816,7 +819,6 @@ if (!document.fullscreenEnabled) $('fs').classList.add('hidden');
 
 const tp = new Map(); // dokunan parmaklar: pointerId -> {x, y}
 let gesture = null;   // {mode: 'pending'|'drag'|'two'|'done', ...}
-let rightNext = false;
 const zoom = { s: 1, tx: 0, ty: 0 };
 
 function applyZoom() {
@@ -830,7 +832,7 @@ function tap(e, button) {
   const p = pos(e);
   send({ t: 'mm', ...p });
   send({ t: 'mb', b: button, d: true, ...p });
-  send({ t: 'mb', b: button, d: false, ...p });
+  send({ t: 'mb', b: button, d: false, caret: button === 0, ...p });
 }
 
 function twoState() {
@@ -844,18 +846,15 @@ canvas.addEventListener('pointerdown', (e) => {
   tp.set(e.pointerId, { x: e.clientX, y: e.clientY });
   if (tp.size === 1) {
     gesture = { mode: 'pending', sx: e.clientX, sy: e.clientY, startEv: { clientX: e.clientX, clientY: e.clientY } };
-    gesture.timer = setTimeout(() => {
-      if (gesture && gesture.mode === 'pending' && connected) {
-        tap(gesture.startEv, 2); // basılı tut = sağ tık
-        if (navigator.vibrate) navigator.vibrate(15);
-        gesture.mode = 'done';
-      }
-    }, 550);
   } else if (tp.size === 2) {
-    if (gesture && gesture.timer) clearTimeout(gesture.timer);
     if (gesture && gesture.mode === 'drag') send({ t: 'mb', b: 0, d: false, ...lastPos });
     const t = twoState();
-    gesture = { mode: 'two', d0: t.d, mx: t.mx, my: t.my, s0: zoom.s, tx0: zoom.tx, ty0: zoom.ty, mx0: t.mx, my0: t.my, pinching: false, wheelAcc: 0 };
+    gesture = {
+      mode: 'two', d0: t.d, mx: t.mx, my: t.my, s0: zoom.s, tx0: zoom.tx, ty0: zoom.ty, mx0: t.mx, my0: t.my,
+      pinching: false, wheelAcc: 0, t0: Date.now(), moved: false,
+      // İki parmakla dokunma = sağ tık: ilk parmağın değdiği yer
+      tapEv: gesture && gesture.mode === 'pending' ? gesture.startEv : { clientX: t.mx, clientY: t.my },
+    };
   }
 }, { passive: false });
 
@@ -865,7 +864,6 @@ canvas.addEventListener('pointermove', (e) => {
   tp.set(e.pointerId, { x: e.clientX, y: e.clientY });
   if (!gesture || !connected) return;
   if (gesture.mode === 'pending' && Math.hypot(e.clientX - gesture.sx, e.clientY - gesture.sy) > 10) {
-    clearTimeout(gesture.timer);
     gesture.mode = 'drag';
     const p = pos(gesture.startEv);
     send({ t: 'mm', ...p });
@@ -878,8 +876,9 @@ canvas.addEventListener('pointermove', (e) => {
   }
   if (gesture.mode === 'two' && tp.size === 2) {
     const t = twoState();
+    if (!gesture.moved && Math.hypot(t.mx - gesture.mx0, t.my - gesture.my0) > 12) gesture.moved = true;
     const ratio = t.d / gesture.d0;
-    if (!gesture.pinching && Math.abs(ratio - 1) > 0.08) gesture.pinching = true;
+    if (!gesture.pinching && Math.abs(ratio - 1) > 0.08) gesture.pinching = gesture.moved = true;
     const r = canvas.parentElement.getBoundingClientRect();
     if (gesture.pinching) {
       // Yakınlaştır: iki parmağın ortası ekranda aynı noktada kalsın.
@@ -913,10 +912,12 @@ function touchEnd(e) {
   e.preventDefault();
   tp.delete(e.pointerId);
   if (!gesture) return;
-  if (gesture.timer) clearTimeout(gesture.timer);
   if (gesture.mode === 'pending' && tp.size === 0 && connected && e.type === 'pointerup') {
-    tap(e, rightNext ? 2 : 0);
-    if (rightNext) { rightNext = false; $('rcBtn').classList.remove('on'); }
+    tap(e, 0);
+    expectCaret();
+  } else if (gesture.mode === 'two' && !gesture.moved && Date.now() - gesture.t0 < 400 && connected && e.type === 'pointerup') {
+    tap(gesture.tapEv, 2); // iki parmakla dokunma = sağ tık
+    if (navigator.vibrate) navigator.vibrate(12);
   } else if (gesture.mode === 'drag' && tp.size === 0) {
     flushMove();
     send({ t: 'mb', b: 0, d: false, ...pos(e) });
@@ -928,10 +929,17 @@ canvas.addEventListener('pointerup', touchEnd, { passive: false });
 canvas.addEventListener('pointercancel', touchEnd, { passive: false });
 
 $('zoomReset').onclick = () => { zoom.s = 1; applyZoom(); };
-$('rcBtn').onclick = (e) => {
-  rightNext = !rightNext;
-  e.currentTarget.classList.toggle('on', rightNext);
-};
+
+// Yazı alanına dokununca klavye: karşı bilgisayar dokunuştan sonra imlecin bir yazı alanında
+// olup olmadığını bildirir ("caret"). Tarayıcı izin veriyorsa (Android) klavye kendiliğinden
+// açılır; iPhone klavyeyi yalnızca dokunuş anında açtırdığı için orada düğme kullanılır.
+let caretWait = 0;
+function expectCaret() { caretWait = Date.now(); }
+function onCaret(on) {
+  if (!touchUI || !on || Date.now() - caretWait > 1500) return;
+  caretWait = 0;
+  if (document.activeElement !== kb) openKeyboard();
+}
 
 // ---- telefon klavyesi ----
 // Gizli giriş kutusu odaklanınca telefon klavyesi açılır. Kutudaki değişiklik farkı
@@ -974,12 +982,20 @@ kb.addEventListener('keydown', (e) => {
   else if (e.key.startsWith('Arrow') || e.key === 'Escape') { e.preventDefault(); sendKey(e.code || e.key); }
 });
 kb.addEventListener('blur', () => document.body.classList.remove('kb-open'));
-$('kbBtn').onclick = () => {
-  if (document.activeElement === kb) { kb.blur(); return; }
+function openKeyboard() {
   kb.value = '';
   kbLast = '';
   document.body.classList.add('kb-open');
   kb.focus();
+  try { if (navigator.virtualKeyboard) navigator.virtualKeyboard.show(); } catch {}
+}
+kb.addEventListener('focus', () => $('kbBtn').classList.add('on'));
+kb.addEventListener('blur', () => $('kbBtn').classList.remove('on'));
+// Düğmeye basınca odak kutudan gitmesin (yoksa klavye kapanıp yeniden açılır).
+$('kbBtn').addEventListener('pointerdown', (e) => e.preventDefault());
+$('kbBtn').onclick = () => {
+  if (document.activeElement === kb) { kb.blur(); return; }
+  openKeyboard();
 };
 
 // ---- dar ekran menüsü (alttan açılan sayfa) ----

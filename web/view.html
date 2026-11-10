@@ -73,12 +73,17 @@
       </div>
     </form>
   </div>
-  <!-- Dokunmatik ekran: alt araç çubuğu ve telefon klavyesi için gizli giriş kutusu -->
-  <div id="mbar" class="mbar">
-    <button id="kbBtn" type="button">Klavye</button>
-    <button id="rcBtn" type="button" title="Sonraki dokunuş sağ tık olur">Sağ tık</button>
-    <button id="zoomReset" type="button" class="hidden">Sığdır</button>
-    <button id="menuBtn2" type="button">Menü</button>
+  <!-- Dokunmatik ekran: sağ altta yüzen düğmeler ve telefon klavyesi için gizli giriş kutusu -->
+  <div id="mbar" class="fabs">
+    <button id="zoomReset" type="button" class="fab sm hidden" aria-label="Sığdır" title="Sığdır">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2H2v4M10 2h4v4M6 14H2v-4M10 14h4v-4"/></svg>
+    </button>
+    <button id="menuBtn2" type="button" class="fab sm" aria-label="Menü" title="Menü">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 4.5h10M3 8h10M3 11.5h10"/></svg>
+    </button>
+    <button id="kbBtn" type="button" class="fab" aria-label="Klavye" title="Klavye">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6 10h.01M9.5 10h.01M13 10h.01M16.5 10h.01M6.5 14h11"/></svg>
+    </button>
   </div>
   <textarea id="kb" class="kbin" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" aria-hidden="true"></textarea>
   <div id="sheetBg" class="sheet-bg"></div>

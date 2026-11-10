@@ -489,20 +489,57 @@ body.framed.fs .winctl { display: none; }
 body.touch .stage { touch-action: none; }
 body.touch canvas#screen { touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 .menu-btn { display: none; }
-.mbar { display: none; }
 .kbin {
   position: fixed; left: 0; bottom: 0; width: 1px; height: 1px; opacity: 0;
   border: 0; padding: 0; resize: none; font-size: 16px; /* iOS: 16px altı odakta sayfayı büyütür */
 }
 .sheet-bg { display: none; }
 
-body.touch .mbar {
-  display: flex; flex: none; gap: 6px; padding: 8px 10px calc(8px + env(safe-area-inset-bottom));
-  background: var(--frame); border-top: 1px solid var(--line);
+/* Sağ altta yüzen düğmeler: görüntünün üstünde durur, yer kaplamaz. */
+.fabs { display: none; }
+body.touch .fabs {
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+  position: fixed; z-index: 40;
+  right: calc(14px + env(safe-area-inset-right));
+  bottom: calc(18px + env(safe-area-inset-bottom));
 }
-body.touch .mbar button { flex: 1; height: 40px; font-size: 13px; }
-body.touch .mbar button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
-body.touch.login .mbar { display: none; }
+body.touch.login .fabs, body.touch.menu-open .fabs { display: none; }
+.fab {
+  width: 52px; height: 52px; padding: 0; border-radius: 50%;
+  display: grid; place-items: center;
+  background: rgba(24, 25, 27, .78); color: #edeef0;
+  border: 1px solid rgba(255, 255, 255, .14);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .45);
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+}
+.fab.sm { width: 38px; height: 38px; }
+.fab.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.fab:active { transform: scale(.94); }
+.fab.hidden { display: none; }
+
+/* Kontroller (dokunmatikte her genişlikte, dar ekranda her zaman) yukarıdan açılan
+   bir sayfada. */
+body.touch .vbar .vctl { display: none; }
+body.touch .vbar .badge { display: none; }
+body.touch.menu-open .vbar .vctl {
+  display: flex; flex-direction: column; align-items: stretch; gap: 8px;
+  position: fixed; left: 8px; right: 8px; z-index: 60;
+  top: calc(8px + env(safe-area-inset-top));
+  margin: 0 auto; max-width: 420px;
+  padding: 14px; background: var(--frame); border: 1px solid var(--line-2); border-radius: 18px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, .55); max-height: calc(100dvh - 24px); overflow-y: auto;
+  app-region: no-drag; -webkit-app-region: no-drag;
+  animation: sheet-down .16s ease-out;
+}
+@keyframes sheet-down { from { transform: translateY(-12px); opacity: 0; } }
+body.touch.menu-open .vctl > button, body.touch.menu-open .vctl > select { width: 100%; height: 44px; max-width: none; font-size: 14px; }
+body.touch.menu-open .vset summary { display: none; }
+body.touch.menu-open .vset-pop { position: static; width: auto; max-width: none; box-shadow: none; border-color: var(--line); }
+body.touch.menu-open .sheet-bg { display: block; position: fixed; inset: 0; z-index: 55; background: rgba(0, 0, 0, .5); }
+
+/* Tam ekranda (dokunmatik) üst çubuk da gizlenir: ekranın tamamı görüntü. */
+body.touch.fs .vbar { position: fixed; top: 0; left: 0; right: 0; height: 0; padding: 0; border: 0; background: none; overflow: visible; }
+body.touch.fs .vbar .vinfo { display: none; }
 
 @media (max-width: 700px) {
   .vbar { flex-wrap: nowrap; padding: 8px 10px; padding-top: calc(8px + env(safe-area-inset-top)); }
@@ -511,16 +548,16 @@ body.touch.login .mbar { display: none; }
   .vbar .stat { display: inline; font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
   .vbar .badge { display: none; }
   .menu-btn { display: inline-flex; flex: none; }
-  body.touch .menu-btn { display: none; } /* dokunmatikte menü alttaki çubukta */
+  body.touch .menu-btn { display: none; } /* dokunmatikte menü sağ alttaki düğmede */
 
-  /* Kontroller alttan açılan sayfada */
+  /* Dar pencere (fare ile): kontroller yine yukarıdan açılan sayfada */
   .vbar .vctl { display: none; }
   body.menu-open .vbar .vctl {
     display: flex; flex-direction: column; align-items: stretch; gap: 8px;
-    position: fixed; left: 8px; right: 8px; bottom: 8px; z-index: 60;
-    padding: 14px; padding-bottom: calc(14px + env(safe-area-inset-bottom));
-    background: var(--frame); border: 1px solid var(--line-2); border-radius: 18px;
-    box-shadow: 0 -10px 40px rgba(0, 0, 0, .5); max-height: 80dvh; overflow-y: auto;
+    position: fixed; left: 8px; right: 8px; z-index: 60;
+    top: calc(52px + env(safe-area-inset-top));
+    padding: 14px; background: var(--frame); border: 1px solid var(--line-2); border-radius: 18px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, .55); max-height: 80dvh; overflow-y: auto;
     app-region: no-drag; -webkit-app-region: no-drag;
   }
   body.menu-open .vctl > button, body.menu-open .vctl > select { width: 100%; height: 42px; max-width: none; font-size: 14px; }
@@ -534,6 +571,6 @@ body.touch.login .mbar { display: none; }
   .vwarn { font-size: 12px; padding: 6px 10px; }
 }
 
-/* Menü açıkken üst çubuk (ve içindeki alttan açılan sayfa) karartmanın üstünde kalsın:
+/* Menü açıkken üst çubuk (ve içindeki sayfa) karartmanın üstünde kalsın:
    esnek öğe olarak .vbar kendi katman bağlamını oluşturur. */
 body.menu-open .vbar { z-index: 70; }

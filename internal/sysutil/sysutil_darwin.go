@@ -152,3 +152,6 @@ func WaitPID(pid int) {
 		time.Sleep(200 * time.Millisecond)
 	}
 }
+
+// TextFocus: macOS'ta henüz desteklenmiyor (telefonda klavye düğmesi kullanılır).
+func TextFocus() bool { return false }

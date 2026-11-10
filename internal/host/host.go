@@ -128,6 +128,7 @@ type message struct {
 	Name  string          `json:"name,omitempty"`
 	Ch    string          `json:"ch,omitempty"`  // tuşun ürettiği karakter (simülasyon modu için)
 	RTC   json.RawMessage `json:"rtc,omitempty"` // sesli görüşme sinyali (WebRTC)
+	Caret bool            `json:"caret,omitempty"` // dokunmatik: bu tıklamadan sonra yazı alanı kontrolü iste
 }
 
 // cleanName, viewer'ın gönderdiği adı ekranda gösterilebilir hale getirir.

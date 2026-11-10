@@ -169,6 +169,9 @@ func (s *session) readLoop(ctx context.Context) {
 			// Normal yoldan basılan düğme normal yoldan bırakılmalı (takılı kalmasın).
 			if !m.D && s.in.ButtonDown(m.B) {
 				s.in.Button(m.B, false, m.X, m.Y)
+				if m.Caret {
+					go s.reportCaret(ctx)
+				}
 				break
 			}
 			switch s.route(ctx, !m.D) {
@@ -242,6 +245,22 @@ func (s *session) readLoop(ctx context.Context) {
 			if s.onRTC != nil && len(m.RTC) > 0 && len(m.RTC) < 64<<10 {
 				s.onRTC(m.RTC)
 			}
+		}
+	}
+}
+
+// reportCaret: telefondan dokunulduktan kısa süre sonra odağın bir yazı alanında olup
+// olmadığını bildirir; telefon klavyeyi kendiliğinden açabilsin.
+func (s *session) reportCaret(ctx context.Context) {
+	for i := 0; i < 3; i++ {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(120 * time.Millisecond):
+		}
+		if sysutil.TextFocus() {
+			s.c.WriteJSON(ctx, map[string]any{"t": "caret", "on": true})
+			return
 		}
 	}
 }
