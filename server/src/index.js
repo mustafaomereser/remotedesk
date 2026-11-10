@@ -14,6 +14,11 @@
 //   POST /rename              {id, secret, newId} -> {id}    (newId boşsa rastgele yeni ID)
 //   POST /signal              {id, sdp}           -> {sdp}   (WebRTC teklifini cihaza iletir, yanıtı döner)
 //
+// Takımlar (cihaz bağlantısı üzerinden, kimliği doğrulanmış cihazlar):
+//        cihaz -> sunucu: {t:"team", op:"create"|"join"|"leave"|"kick"|"delete"|"code", req, name, code, tid, id}
+//        sunucu -> cihaz: {t:"team-res", req, err?}  {t:"teams", list:[{tid, name, code, owner, members:[{id, label}]}]}
+//        Takım üyeleri birbirinin cihazlarını listede görür; davet kodunu bilen katılır.
+//
 // ID biçimi: 9 haneli sayı (rastgele) ya da kullanıcının seçtiği ad (harfle başlar,
 // küçük harf/rakam/tire, 4-24 karakter; ör. "mustafa-pc").
 
@@ -47,6 +52,21 @@ function sameString(a, b) {
 
 const validId = (s) => typeof s === "string" && (/^[1-9]\d{8}$/.test(s) || /^[a-z][a-z0-9-]{2,22}[a-z0-9]$/.test(s));
 const RESERVED = new Set(["admin", "root", "remotedesk", "support", "destek", "help", "test", "system", "server"]);
+
+const TEAM_MAX_PER_DEVICE = 10;
+const TEAM_MAX_MEMBERS = 50;
+const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // karışan harfler (0/O, 1/I) yok
+
+function randomCode(n) {
+  const buf = new Uint8Array(n);
+  crypto.getRandomValues(buf);
+  let s = "";
+  for (const b of buf) s += CODE_CHARS[b % CODE_CHARS.length];
+  return s;
+}
+
+const cleanText = (s, max) =>
+  typeof s === "string" ? s.replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, max) : "";
 
 export class Hub {
   constructor(state, env) {
@@ -226,6 +246,7 @@ function fail(t){document.getElementById('sp').remove();m.className='e';m.textCo
     }
     await this.state.storage.put("dev:" + newId, { hash: dev.hash, created: dev.created, renamed: Date.now() });
     await this.state.storage.delete("dev:" + body.id);
+    await this.renameInTeams(body.id, newId);
     // Eski ID ile açık bağlantı kapanır; cihaz yeni ID ile yeniden bağlanır.
     for (const ws of this.state.getWebSockets(body.id)) {
       try { ws.close(4001, "id degisti"); } catch {}
@@ -310,7 +331,157 @@ function fail(t){document.getElementById('sp').remove();m.className='e';m.textCo
     return json({ url: m.url });
   }
 
-  webSocketMessage(ws, msg) {
+  // ---- takımlar ----
+
+  async teamsOf(id) {
+    return (await this.state.storage.get("devteams:" + id)) || [];
+  }
+
+  async teamList(id) {
+    const out = [];
+    for (const tid of await this.teamsOf(id)) {
+      const t = await this.state.storage.get("team:" + tid);
+      if (!t || !t.members[id]) continue;
+      out.push({
+        tid, name: t.name, code: t.code, owner: t.owner === id,
+        members: Object.entries(t.members).map(([mid, m]) => ({ id: mid, label: m.label || "", owner: t.owner === mid })),
+      });
+    }
+    return out;
+  }
+
+  async pushTeams(id) {
+    const list = await this.teamList(id);
+    for (const ws of this.state.getWebSockets(id)) {
+      try { ws.send(JSON.stringify({ t: "teams", list })); } catch {}
+    }
+  }
+
+  // pushTeamMembers: takımın tüm çevrimiçi üyelerine güncel listeyi gönderir.
+  async pushTeamMembers(ids) {
+    for (const id of new Set(ids)) await this.pushTeams(id);
+  }
+
+  async renameInTeams(oldId, newId) {
+    const tids = await this.teamsOf(oldId);
+    if (!tids.length) return;
+    const affected = [];
+    for (const tid of tids) {
+      const t = await this.state.storage.get("team:" + tid);
+      if (!t || !t.members[oldId]) continue;
+      t.members[newId] = t.members[oldId];
+      delete t.members[oldId];
+      if (t.owner === oldId) t.owner = newId;
+      await this.state.storage.put("team:" + tid, t);
+      affected.push(...Object.keys(t.members));
+    }
+    await this.state.storage.put("devteams:" + newId, tids);
+    await this.state.storage.delete("devteams:" + oldId);
+    await this.pushTeamMembers(affected.filter((x) => x !== newId));
+  }
+
+  async updateLabel(id, label) {
+    label = cleanText(label, 40);
+    if (!label) return;
+    for (const tid of await this.teamsOf(id)) {
+      const t = await this.state.storage.get("team:" + tid);
+      if (!t || !t.members[id] || t.members[id].label === label) continue;
+      t.members[id].label = label;
+      await this.state.storage.put("team:" + tid, t);
+      await this.pushTeamMembers(Object.keys(t.members).filter((x) => x !== id));
+    }
+  }
+
+  async removeMember(t, tid, id) {
+    delete t.members[id];
+    const tids = (await this.teamsOf(id)).filter((x) => x !== tid);
+    if (tids.length) await this.state.storage.put("devteams:" + id, tids);
+    else await this.state.storage.delete("devteams:" + id);
+  }
+
+  async deleteTeam(t, tid) {
+    for (const mid of Object.keys(t.members)) await this.removeMember(t, tid, mid);
+    await this.state.storage.delete("code:" + t.code);
+    await this.state.storage.delete("team:" + tid);
+  }
+
+  async teamOp(ws, att, m) {
+    const id = att.id;
+    const reply = (err) => { try { ws.send(JSON.stringify({ t: "team-res", req: m.req, err })); } catch {} };
+    if (this.limited("tm:" + id, 30, 3600_000)) return reply("Çok fazla takım işlemi. Biraz sonra tekrar dene.");
+    const st = this.state.storage;
+    const mine = await this.teamsOf(id);
+    switch (m.op) {
+      case "create": {
+        const name = cleanText(m.name, 40);
+        if (!name) return reply("Takıma bir ad ver.");
+        if (mine.length >= TEAM_MAX_PER_DEVICE) return reply("En fazla " + TEAM_MAX_PER_DEVICE + " takımda olabilirsin.");
+        const tid = randomCode(12).toLowerCase();
+        let code = randomCode(10);
+        while ((await st.get("code:" + code)) !== undefined) code = randomCode(10);
+        await st.put("team:" + tid, { name, code, owner: id, created: Date.now(), members: { [id]: { label: cleanText(att.label, 40), joined: Date.now() } } });
+        await st.put("code:" + code, tid);
+        await st.put("devteams:" + id, [...mine, tid]);
+        reply();
+        return this.pushTeams(id);
+      }
+      case "join": {
+        const code = typeof m.code === "string" ? m.code.toUpperCase().replace(/[^A-Z0-9]/g, "") : "";
+        if (this.limited("tj:" + id, 20, 3600_000)) return reply("Çok fazla deneme. Biraz sonra tekrar dene.");
+        const tid = code.length === 10 ? await st.get("code:" + code) : undefined;
+        const t = tid && (await st.get("team:" + tid));
+        if (!t) return reply("Davet kodu geçersiz.");
+        if (t.members[id]) return reply("Zaten bu takımdasın.");
+        if (mine.length >= TEAM_MAX_PER_DEVICE) return reply("En fazla " + TEAM_MAX_PER_DEVICE + " takımda olabilirsin.");
+        if (Object.keys(t.members).length >= TEAM_MAX_MEMBERS) return reply("Takım dolu.");
+        t.members[id] = { label: cleanText(att.label, 40), joined: Date.now() };
+        await st.put("team:" + tid, t);
+        await st.put("devteams:" + id, [...mine, tid]);
+        reply();
+        return this.pushTeamMembers(Object.keys(t.members));
+      }
+      case "leave":
+      case "kick":
+      case "delete":
+      case "code": {
+        const tid = typeof m.tid === "string" ? m.tid : "";
+        const t = mine.includes(tid) && (await st.get("team:" + tid));
+        if (!t || !t.members[id]) return reply("Takım bulunamadı.");
+        const members = Object.keys(t.members);
+        if (m.op === "leave") {
+          if (t.owner === id) {
+            // Sahip ayrılırsa takım en eski üyeye geçer; tek kişiyse silinir.
+            const rest = Object.entries(t.members).filter(([mid]) => mid !== id).sort((a, b) => a[1].joined - b[1].joined);
+            if (!rest.length) { await this.deleteTeam(t, tid); reply(); return this.pushTeams(id); }
+            t.owner = rest[0][0];
+          }
+          await this.removeMember(t, tid, id);
+          await st.put("team:" + tid, t);
+        } else {
+          if (t.owner !== id) return reply("Bunu yalnızca takımın sahibi yapabilir.");
+          if (m.op === "kick") {
+            if (!validId(m.id) || m.id === id || !t.members[m.id]) return reply("Üye bulunamadı.");
+            await this.removeMember(t, tid, m.id);
+            await st.put("team:" + tid, t);
+          } else if (m.op === "delete") {
+            await this.deleteTeam(t, tid);
+          } else {
+            await st.delete("code:" + t.code);
+            let code = randomCode(10);
+            while ((await st.get("code:" + code)) !== undefined) code = randomCode(10);
+            t.code = code;
+            await st.put("code:" + code, tid);
+            await st.put("team:" + tid, t);
+          }
+        }
+        reply();
+        return this.pushTeamMembers(members);
+      }
+    }
+    return reply("Bilinmeyen işlem.");
+  }
+
+  async webSocketMessage(ws, msg) {
     if (typeof msg !== "string" || msg.length > 20000) return;
     let m;
     try { m = JSON.parse(msg); } catch { return; }
@@ -324,17 +495,28 @@ function fail(t){document.getElementById('sp').remove();m.className='e';m.textCo
         if (resolve) resolve(m);
         return;
       }
+      case "team":
+        if (typeof m.req === "string" && m.req.length < 40) await this.teamOp(ws, att, m);
+        return;
       case "hello":
       case "avail":
       case "watch": {
         const was = !!att.avail;
-        if (m.t === "hello") att.avail = !!m.avail;
+        if (m.t === "hello") {
+          att.avail = !!m.avail;
+          att.label = cleanText(m.label, 40);
+        }
         if (m.t === "avail") att.avail = !!m.on;
         if (m.t === "hello" || m.t === "watch") att.watch = cleanIds(m.t === "hello" ? m.watch : m.ids);
         att.at = Date.now();
         ws.serializeAttachment(att);
         if (was !== att.avail) this.notify(att.id, att.avail);
         if (m.t !== "avail") this.snapshot(ws, att.watch);
+        if (m.t === "hello") {
+          await this.updateLabel(att.id, att.label);
+          const list = await this.teamList(att.id);
+          try { ws.send(JSON.stringify({ t: "teams", list })); } catch {}
+        }
         return;
       }
     }

@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -174,9 +175,67 @@ type Client struct {
 	OnPresence func(map[string]bool)
 	// OnSignal, biri WebRTC ile doğrudan bağlanmak istediğinde teklifi verir; yanıtı dönmelidir.
 	OnSignal func(offer string) (string, error)
+	// Label, takım üyelerine görünen cihaz adıdır (her bağlanışta gönderilir).
+	Label func() string
+	// OnTeams, üyesi olunan takımların listesi değişince (ve ilk bağlanışta) çağrılır.
+	OnTeams func([]Team)
 
-	mu   sync.Mutex
-	conn *websocket.Conn
+	mu     sync.Mutex
+	conn   *websocket.Conn
+	reqs   map[string]chan string // takım işlemi -> sonuç (boş: başarılı)
+	reqSeq int
+}
+
+// Team, sunucudaki bir takımdır: üyeler birbirinin cihazlarını listede görür.
+type Team struct {
+	TID     string       `json:"tid"`
+	Name    string       `json:"name"`
+	Code    string       `json:"code"`  // davet kodu
+	Owner   bool         `json:"owner"` // bu cihaz takımın sahibi mi
+	Members []TeamMember `json:"members"`
+}
+
+type TeamMember struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+	Owner bool   `json:"owner"`
+}
+
+// TeamOp, bir takım işlemi gönderir ve sunucunun yanıtını bekler.
+// op: create (name) | join (code) | leave (tid) | kick (tid, id) | delete (tid) | code (tid)
+func (c *Client) TeamOp(ctx context.Context, op map[string]string) error {
+	c.mu.Lock()
+	if c.conn == nil {
+		c.mu.Unlock()
+		return errors.New("Sunucuya bağlı değil.")
+	}
+	if c.reqs == nil {
+		c.reqs = map[string]chan string{}
+	}
+	c.reqSeq++
+	req := "t" + strconv.Itoa(c.reqSeq)
+	ch := make(chan string, 1)
+	c.reqs[req] = ch
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		delete(c.reqs, req)
+		c.mu.Unlock()
+	}()
+	m := map[string]any{"t": "team", "req": req}
+	for k, v := range op {
+		m[k] = v
+	}
+	c.Send(m)
+	select {
+	case <-ctx.Done():
+		return errors.New("Sunucu yanıt vermedi.")
+	case e := <-ch:
+		if e != "" {
+			return errors.New(e)
+		}
+		return nil
+	}
 }
 
 // Send, açık sunucu bağlantısına mesaj gönderir (bağlı değilse sessizce geçer;
@@ -246,6 +305,9 @@ func (c *Client) session(ctx context.Context) error {
 		c.mu.Unlock()
 	}()
 	hello := map[string]any{"t": "hello", "avail": false, "watch": []string{}}
+	if c.Label != nil {
+		hello["label"] = c.Label()
+	}
 	if c.Hello != nil {
 		avail, watch := c.Hello()
 		if watch == nil {
@@ -306,12 +368,32 @@ func (c *Client) session(ctx context.Context) error {
 			continue
 		}
 		var m struct {
-			T   string          `json:"t"`
-			Req string          `json:"req"`
-			S   map[string]bool `json:"s"`
-			SDP string          `json:"sdp"`
+			T    string          `json:"t"`
+			Req  string          `json:"req"`
+			S    map[string]bool `json:"s"`
+			SDP  string          `json:"sdp"`
+			Err  string          `json:"err"`
+			List []Team          `json:"list"`
 		}
 		if json.Unmarshal(data, &m) != nil {
+			continue
+		}
+		if m.T == "teams" {
+			if c.OnTeams != nil {
+				if m.List == nil {
+					m.List = []Team{}
+				}
+				c.OnTeams(m.List)
+			}
+			continue
+		}
+		if m.T == "team-res" {
+			c.mu.Lock()
+			ch := c.reqs[m.Req]
+			c.mu.Unlock()
+			if ch != nil {
+				ch <- m.Err
+			}
 			continue
 		}
 		if m.T == "presence" {

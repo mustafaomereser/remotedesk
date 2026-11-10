@@ -153,6 +153,7 @@ type App struct {
 
 	hubc         *hub.Client // sunucu bağlantısı (mu ile korunur)
 	hubConnected bool
+	teams        []hub.Team // üyesi olunan takımlar (mu ile korunur)
 }
 
 func New(o Options) *App {
@@ -637,6 +638,8 @@ func (a *App) uiHandler() http.Handler {
 	mux.HandleFunc("GET /api/peers", a.handlePeers)
 	mux.HandleFunc("POST /api/peers", a.handlePeerSave)
 	mux.HandleFunc("POST /api/resolve", a.handleResolve)
+	mux.HandleFunc("GET /api/teams", a.handleTeams)
+	mux.HandleFunc("POST /api/teams", a.handleTeamOp)
 	mux.HandleFunc("GET /api/me", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"name": defaultName()})

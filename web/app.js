@@ -454,22 +454,34 @@ $('connectForm').onsubmit = (e) => {
   syncConnectLabel();
 };
 
-// ---- kayıtlı cihazlar ----
+// ---- kayıtlı cihazlar, gruplar ve takımlar ----
 
 let peers = [];
-let editing = null; // adı düzenlenen cihazın ID'si
+let teams = [];
+let editing = null;   // adı düzenlenen cihazın ID'si
+let grouping = null;  // grubu düzenlenen cihazın ID'si
+let teamForm = '';    // '' | 'create' | 'join'
+let openTeam = null;  // ayrıntısı (davet kodu, ayarlar) açık takım
+const collapsed = new Set(JSON.parse(localStorageGet('rd_collapsed') || '[]'));
+
+function localStorageGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
+function localStorageSet(k, v) { try { localStorage.setItem(k, v); } catch {} }
 
 async function loadPeers() {
   try {
-    const r = await fetch('/api/peers');
-    if (!r.ok) return;
-    peers = await r.json();
-    if (!editing) renderPeers();
+    const [r1, r2] = await Promise.all([fetch('/api/peers'), fetch('/api/teams')]);
+    if (r1.ok) peers = await r1.json();
+    if (r2.ok) teams = await r2.json();
+    if (!editing && !grouping && !(document.activeElement && document.activeElement.closest('#peers form'))) renderPeers();
   } catch {}
 }
 
 function savePeer(body) {
   return api('peers', body).then(loadPeers).catch((e) => toast(e.message));
+}
+
+function teamOp(body) {
+  return api('teams', body).then(() => setTimeout(loadPeers, 300)).catch((e) => { toast(e.message); throw e; });
 }
 
 function iconBtn(text, title, onclick) {
@@ -482,85 +494,262 @@ function iconBtn(text, title, onclick) {
   return b;
 }
 
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+}
+
+// connectMany: listedeki çevrimiçi cihazların hepsine ayrı pencerelerde bağlanır
+// (şifre yok: her biri bağlantı isteği olarak gider).
+function connectMany(ids) {
+  const list = ids.filter((id) => !openWin(id));
+  if (!list.length) { toast('Bağlanılacak çevrimiçi cihaz yok'); return; }
+  list.forEach((id, i) => setTimeout(() => startConnection(id, ''), i * 400));
+  toast(`${list.length} cihaza bağlantı isteği gönderiliyor`);
+}
+
+function sectionHead(key, title, count, actions) {
+  const h = el('div', 'group-head');
+  const t = el('button', 'group-toggle');
+  t.type = 'button';
+  t.setAttribute('aria-expanded', String(!collapsed.has(key)));
+  t.append(el('span', 'chev', collapsed.has(key) ? '▸' : '▾'), el('span', 'group-title', title));
+  if (count) t.append(el('span', 'group-count', count));
+  t.onclick = () => {
+    if (collapsed.has(key)) collapsed.delete(key); else collapsed.add(key);
+    localStorageSet('rd_collapsed', JSON.stringify([...collapsed]));
+    renderPeers();
+  };
+  h.appendChild(t);
+  const acts = el('div', 'group-acts');
+  for (const a of actions || []) if (a) acts.appendChild(a);
+  h.appendChild(acts);
+  return h;
+}
+
+function smallBtn(text, title, onclick, cls) {
+  const b = el('button', 'small ' + (cls || ''), text);
+  b.type = 'button';
+  b.title = title || '';
+  b.onclick = (e) => { e.stopPropagation(); onclick(); };
+  return b;
+}
+
+// deviceRow: tek cihaz satırı (kayıtlı cihaz ya da takım üyesi).
+function deviceRow(d, opts) {
+  const row = el('div', 'peer');
+  row.tabIndex = 0;
+  const connectedWin = d.open || openWin(d.id);
+  const dot = el('span', 'dot ' + (d.online ? 'ok' : 'off'));
+  dot.title = d.online ? 'Çevrimiçi' : 'Çevrimdışı';
+  row.appendChild(dot);
+
+  const text = el('div', 'peer-text');
+  const inlineInput = (value, placeholder, save, listId) => {
+    const inp = document.createElement('input');
+    inp.type = 'text';
+    inp.maxLength = 40;
+    inp.value = value || '';
+    inp.placeholder = placeholder;
+    if (listId) inp.setAttribute('list', listId);
+    inp.onclick = (e) => e.stopPropagation();
+    let finished = false;
+    const done = (ok) => {
+      if (finished) return;
+      finished = true;
+      editing = grouping = null;
+      if (ok) save(inp.value); else renderPeers();
+    };
+    inp.onkeydown = (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') done(true);
+      if (e.key === 'Escape') done(false);
+    };
+    inp.onblur = () => done(true);
+    setTimeout(() => inp.focus(), 0);
+    return inp;
+  };
+  if (!opts.team && editing === d.id) {
+    text.appendChild(inlineInput(d.name, 'Cihaz adı', (v) => savePeer({ id: d.id, name: v })));
+  } else if (!opts.team && grouping === d.id) {
+    text.appendChild(inlineInput(d.group, 'Grup adı (boş: gruptan çıkar)', (v) => savePeer({ id: d.id, group: v }), 'groupNames'));
+  } else {
+    const title = opts.team ? (d.name || d.label || fmtId(d.id)) : (d.name || fmtId(d.id));
+    const name = el('div', 'peer-name', title);
+    if (d.self) name.appendChild(el('span', 'tag', 'bu bilgisayar'));
+    if (d.owner) name.appendChild(el('span', 'tag', 'sahip'));
+    const sub = el('div', 'peer-sub', (title !== fmtId(d.id) ? fmtId(d.id) + ' · ' : '') +
+      (d.self ? 'sen' : connectedWin ? 'bağlısın' : d.online ? 'çevrimiçi' : 'çevrimdışı'));
+    text.append(name, sub);
+  }
+  row.appendChild(text);
+
+  const acts = el('div', 'peer-acts');
+  if (opts.team) {
+    if (opts.canKick && !d.self) {
+      acts.append(iconBtn('✕', 'Takımdan çıkar', () => {
+        if (confirmInline(row, `${d.label || fmtId(d.id)} takımdan çıkarılsın mı?`, () => teamOp({ op: 'kick', tid: opts.tid, id: d.id }))) return;
+      }));
+    }
+  } else {
+    const star = iconBtn(d.fav ? '★' : '☆', d.fav ? 'Favorilerden çıkar' : 'Favorilere ekle',
+      () => savePeer({ id: d.id, fav: !d.fav }));
+    if (d.fav) star.classList.add('on');
+    acts.append(
+      star,
+      iconBtn('▤', 'Gruba ekle / grubunu değiştir', () => { grouping = d.id; renderPeers(); }),
+      iconBtn('✎', 'Ad ver', () => { editing = d.id; renderPeers(); }),
+      iconBtn('✕', 'Listeden kaldır', () => savePeer({ id: d.id, delete: true })),
+    );
+  }
+  row.appendChild(acts);
+
+  const pick = () => {
+    if (d.self) return;
+    if (d.open) { startConnection(d.id, ''); return; } // açık pencereyi öne getirir
+    const w = openWin(d.id);
+    if (w) { w.focus(); return; }
+    $('remoteId').value = fmtId(d.id);
+    $('remotePw').value = '';
+    $('remotePw').focus();
+    syncConnectLabel();
+    if (!d.online) toast('Bu cihaz şu an çevrimdışı görünüyor');
+  };
+  row.onclick = pick;
+  row.onkeydown = (e) => { if (e.key === 'Enter' && e.target === row) pick(); };
+  return row;
+}
+
+// confirmInline: satırın altında küçük bir "emin misin" kutusu (tarayıcı confirm() yerine).
+function confirmInline(after, text, onYes) {
+  const old = document.querySelector('.confirm-inline');
+  if (old) old.remove();
+  const box = el('div', 'confirm-inline');
+  box.append(el('span', '', text));
+  const yes = smallBtn('Evet', '', () => { box.remove(); onYes(); }, 'danger');
+  const no = smallBtn('Vazgeç', '', () => box.remove());
+  box.append(yes, no);
+  after.after(box);
+  return true;
+}
+
+function teamForms(box) {
+  if (!teamForm) return;
+  const f = document.createElement('form');
+  f.className = 'team-form';
+  const inp = document.createElement('input');
+  inp.type = 'text';
+  inp.maxLength = teamForm === 'join' ? 12 : 40;
+  inp.placeholder = teamForm === 'join' ? 'Davet kodu (ör. K7M2QX9PRT)' : 'Takım adı (ör. Ofis, Aile)';
+  inp.spellcheck = false;
+  if (teamForm === 'join') inp.style.textTransform = 'uppercase';
+  const ok = el('button', 'primary small', teamForm === 'join' ? 'Katıl' : 'Oluştur');
+  ok.type = 'submit';
+  const cancel = smallBtn('Vazgeç', '', () => { teamForm = ''; renderPeers(); });
+  f.append(inp, ok, cancel);
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    const v = inp.value.trim();
+    if (!v) return;
+    ok.disabled = true;
+    try {
+      if (teamForm === 'join') await teamOp({ op: 'join', code: v });
+      else await teamOp({ op: 'create', name: v });
+      toast(teamForm === 'join' ? 'Takıma katıldın' : 'Takım oluşturuldu');
+      teamForm = '';
+      renderPeers();
+    } catch {
+      ok.disabled = false;
+    }
+  };
+  box.appendChild(f);
+  setTimeout(() => inp.focus(), 0);
+}
+
+function renderTeam(box, t) {
+  const online = t.members.filter((m) => m.online && !m.self);
+  const key = 'team:' + t.tid;
+  const detail = openTeam === t.tid;
+  box.appendChild(sectionHead(key, t.name, `${online.length + 1}/${t.members.length} çevrimiçi`, [
+    online.length > 1 ? smallBtn('Hepsine bağlan', 'Takımdaki çevrimiçi cihazların hepsine ayrı pencerelerde bağlan', () => connectMany(online.map((m) => m.id))) : null,
+    smallBtn(detail ? 'Kapat' : 'Davet et', 'Davet kodu ve takım ayarları', () => { openTeam = detail ? null : t.tid; renderPeers(); }),
+  ]));
+  if (collapsed.has(key)) return;
+  if (detail) {
+    const d = el('div', 'team-detail');
+    const row = el('div', 'team-code');
+    row.append(el('span', 'muted', 'Davet kodu'), el('b', 'mono', t.code));
+    row.append(smallBtn('Kopyala', '', () => copy(t.code, 'Davet kodu')));
+    d.appendChild(row);
+    d.appendChild(el('p', 'hint', 'Bu kodu takıma katılacak bilgisayarda Cihazlar > Koda katıl alanına girin. Takımdakiler birbirinin cihazlarını ve çevrimiçi durumunu görür; bağlanmak için yine şifre ya da onay gerekir.'));
+    const acts = el('div', 'team-acts');
+    if (t.owner) {
+      acts.append(smallBtn('Kodu yenile', 'Eski kod geçersiz olur', () => teamOp({ op: 'code', tid: t.tid }).then(() => toast('Yeni davet kodu oluşturuldu'), () => {})));
+      const del = smallBtn('Takımı sil', '', () => confirmInline(del, `"${t.name}" herkes için silinsin mi?`, () => teamOp({ op: 'delete', tid: t.tid }).then(() => { openTeam = null; }, () => {})), 'danger');
+      acts.append(del);
+    }
+    const leave = smallBtn('Takımdan ayrıl', '', () => confirmInline(leave, `"${t.name}" takımından ayrılınsın mı?`, () => teamOp({ op: 'leave', tid: t.tid }).then(() => { openTeam = null; }, () => {})), 'danger');
+    acts.append(leave);
+    d.appendChild(acts);
+    box.appendChild(d);
+  }
+  for (const m of t.members) box.appendChild(deviceRow(m, { team: true, tid: t.tid, canKick: t.owner }));
+}
+
 function renderPeers() {
   const box = $('peers');
   box.innerHTML = '';
-  // Sunucusuz modda kalıcı ID yok: kayıtlı cihaz listesi gösterilmez.
-  if (!peers.length || (state && !state.hub)) return;
-  const h = document.createElement('div');
-  h.className = 'recent-head';
-  h.textContent = 'Cihazlar';
-  box.appendChild(h);
+  // Sunucusuz modda kalıcı ID yok: kayıtlı cihaz listesi ve takımlar gösterilmez.
+  if (state && !state.hub) return;
 
+  // Takımlar
+  const head = el('div', 'recent-head');
+  head.append(el('span', '', 'Takımlar'));
+  const ha = el('div', 'head-acts');
+  ha.append(
+    smallBtn('Takım oluştur', 'Yeni takım: davet koduyla başka bilgisayarlar katılır', () => { teamForm = teamForm === 'create' ? '' : 'create'; renderPeers(); }),
+    smallBtn('Koda katıl', 'Davet koduyla bir takıma katıl', () => { teamForm = teamForm === 'join' ? '' : 'join'; renderPeers(); }),
+  );
+  head.appendChild(ha);
+  box.appendChild(head);
+  teamForms(box);
+  if (!teams.length && !teamForm) {
+    box.appendChild(el('p', 'hint empty-hint', 'Takım kurarak ofisteki ya da ailedeki bilgisayarları tek listede toplayabilir, hangisinin açık olduğunu görebilirsin.'));
+  }
+  for (const t of teams) renderTeam(box, t);
+
+  // Kendi cihaz listem: gruplara göre
+  if (!peers.length) return;
+  const h2 = el('div', 'recent-head');
+  h2.append(el('span', '', 'Cihazlarım'));
+  box.appendChild(h2);
+  const groups = new Map();
   for (const p of peers) {
-    const row = document.createElement('div');
-    row.className = 'peer';
-    row.tabIndex = 0;
-    const connectedWin = p.open || openWin(p.id);
-
-    const dot = document.createElement('span');
-    dot.className = 'dot ' + (p.online ? 'ok' : 'off');
-    dot.title = p.online ? 'Çevrimiçi' : 'Çevrimdışı';
-    row.appendChild(dot);
-
-    const text = document.createElement('div');
-    text.className = 'peer-text';
-    if (editing === p.id) {
-      const inp = document.createElement('input');
-      inp.type = 'text';
-      inp.maxLength = 40;
-      inp.value = p.name || '';
-      inp.placeholder = 'Cihaz adı';
-      inp.onclick = (e) => e.stopPropagation();
-      const done = (save) => {
-        if (editing !== p.id) return;
-        editing = null;
-        if (save) savePeer({ id: p.id, name: inp.value }); else renderPeers();
-      };
-      inp.onkeydown = (e) => {
-        e.stopPropagation();
-        if (e.key === 'Enter') done(true);
-        if (e.key === 'Escape') done(false);
-      };
-      inp.onblur = () => done(true);
-      text.appendChild(inp);
-      setTimeout(() => inp.focus(), 0);
-    } else {
-      const name = document.createElement('div');
-      name.className = 'peer-name';
-      name.textContent = p.name || fmtId(p.id);
-      const sub = document.createElement('div');
-      sub.className = 'peer-sub';
-      sub.textContent = (p.name ? fmtId(p.id) + ' · ' : '') +
-        (connectedWin ? 'bağlısın' : p.online ? 'çevrimiçi' : 'çevrimdışı');
-      text.append(name, sub);
+    const g = p.group || '';
+    if (!groups.has(g)) groups.set(g, []);
+    groups.get(g).push(p);
+  }
+  const names = [...groups.keys()].filter(Boolean).sort((x, y) => x.localeCompare(y, 'tr'));
+  // Grup adı önerileri
+  const dl = document.createElement('datalist');
+  dl.id = 'groupNames';
+  for (const n of names) { const o = document.createElement('option'); o.value = n; dl.appendChild(o); }
+  box.appendChild(dl);
+  const order = names.length ? [...names, ''] : [''];
+  for (const g of order) {
+    const list = groups.get(g);
+    if (!list) continue;
+    if (names.length) {
+      const key = 'grp:' + g;
+      const on = list.filter((p) => p.online);
+      box.appendChild(sectionHead(key, g || 'Grupsuz', `${on.length}/${list.length}`, [
+        on.length > 1 ? smallBtn('Hepsine bağlan', 'Bu gruptaki çevrimiçi cihazların hepsine bağlan', () => connectMany(on.map((p) => p.id))) : null,
+      ]));
+      if (collapsed.has(key)) continue;
     }
-    row.appendChild(text);
-
-    const acts = document.createElement('div');
-    acts.className = 'peer-acts';
-    const star = iconBtn(p.fav ? '★' : '☆', p.fav ? 'Favorilerden çıkar' : 'Favorilere ekle',
-      () => savePeer({ id: p.id, fav: !p.fav }));
-    if (p.fav) star.classList.add('on');
-    acts.append(
-      star,
-      iconBtn('✎', 'Ad ver', () => { editing = p.id; renderPeers(); }),
-      iconBtn('✕', 'Listeden kaldır', () => savePeer({ id: p.id, delete: true })),
-    );
-    row.appendChild(acts);
-
-    const pick = () => {
-      if (p.open) { startConnection(p.id, ''); return; } // açık pencereyi öne getirir
-      const w = openWin(p.id);
-      if (w) { w.focus(); return; }
-      $('remoteId').value = fmtId(p.id);
-      $('remotePw').value = '';
-      $('remotePw').focus();
-      if (!p.online) toast('Bu cihaz şu an çevrimdışı görünüyor');
-    };
-    row.onclick = pick;
-    row.onkeydown = (e) => { if (e.key === 'Enter' && e.target === row) pick(); };
-    box.appendChild(row);
+    for (const p of list) box.appendChild(deviceRow(p, {}));
   }
 }
 

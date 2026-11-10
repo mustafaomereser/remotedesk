@@ -413,6 +413,28 @@ body.fs .vbar:has(.vset[open]) { transform: translate(-50%, 0); }
 .peer-sub { font-size: 12px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .peer-text input { height: 32px; }
 .peer-acts { display: flex; gap: 2px; flex: none; }
+.recent-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.recent-head .head-acts { display: flex; gap: 6px; text-transform: none; letter-spacing: 0; }
+.group-head { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.group-toggle {
+  display: flex; align-items: center; justify-content: flex-start; gap: 8px; flex: 1; min-width: 0; height: 32px; padding: 0 6px;
+  background: transparent; border: 0; color: var(--text); font-weight: 600; font-size: 13px; text-align: left;
+}
+.group-toggle:hover { background: transparent; color: #fff; }
+.group-toggle .chev { color: var(--faint); width: 10px; }
+.group-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.group-count { color: var(--faint); font-weight: 400; font-size: 12px; }
+.group-acts { display: flex; gap: 6px; flex: none; }
+.team-form, .confirm-inline { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; padding: 8px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--surface); }
+.team-form input { flex: 1; min-width: 160px; height: 34px; }
+.confirm-inline span { flex: 1; min-width: 160px; font-size: 13px; }
+.team-detail { padding: 10px 12px; border: 1px dashed var(--line-2); border-radius: 10px; display: flex; flex-direction: column; gap: 8px; }
+.team-detail .hint { margin: 0; }
+.team-code { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.team-code b { font-size: 16px; letter-spacing: .08em; }
+.team-acts { display: flex; gap: 6px; flex-wrap: wrap; }
+.empty-hint { margin: 0 0 4px; }
+.peer-name .tag { margin-left: 6px; }
 button.icon {
   width: 30px; height: 30px; padding: 0; border-radius: 8px;
   background: transparent; border-color: transparent; color: var(--faint); font-size: 14px;

@@ -85,8 +85,10 @@ func (a *App) hubLoop(ctx context.Context) {
 				Dev:    d,
 				OnOpen: a.openForPeer,
 				Hello: func() (bool, []string) {
-					return a.isOnline(), a.peers.ids()
+					return a.isOnline(), a.watchIDs()
 				},
+				Label:      deviceLabel,
+				OnTeams:    a.setTeams,
 				OnPresence: a.peers.setPresence,
 				OnSignal: func(offer string) (string, error) {
 					if !a.isOnline() {
@@ -147,8 +149,134 @@ func (a *App) watchPeers() {
 	c := a.hubc
 	a.mu.Unlock()
 	if c != nil {
-		c.Watch(a.peers.ids())
+		c.Watch(a.watchIDs())
 	}
+}
+
+// watchIDs: çevrimiçi durumu izlenen cihazlar = kayıtlı cihazlar + takım üyeleri.
+func (a *App) watchIDs() []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(id string) {
+		if id != "" && !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	for _, id := range a.peers.ids() {
+		add(id)
+	}
+	a.mu.Lock()
+	self := a.dev.ID
+	for _, t := range a.teams {
+		for _, m := range t.Members {
+			if m.ID != self {
+				add(m.ID)
+			}
+		}
+	}
+	a.mu.Unlock()
+	if len(out) > 100 {
+		out = out[:100]
+	}
+	return out
+}
+
+// ---- takımlar ----
+
+func (a *App) setTeams(list []hub.Team) {
+	a.mu.Lock()
+	a.teams = list
+	a.mu.Unlock()
+	a.watchPeers()
+}
+
+// deviceLabel: takım üyelerine görünen ad (bilgisayarın adı).
+func deviceLabel() string {
+	h, _ := os.Hostname()
+	return cleanLabel(h)
+}
+
+// TeamView, arayüze gönderilen takım bilgisidir (üyelerin çevrimiçi durumuyla).
+type TeamView struct {
+	hub.Team
+	Members []TeamMemberView `json:"members"`
+}
+
+type TeamMemberView struct {
+	hub.TeamMember
+	Self   bool   `json:"self"`
+	Online bool   `json:"online"`
+	Open   bool   `json:"open"`
+	Name   string `json:"name"` // kayıtlı cihazlarda verilen ad (varsa)
+}
+
+func (a *App) handleTeams(w http.ResponseWriter, r *http.Request) {
+	a.mu.Lock()
+	teams := append([]hub.Team(nil), a.teams...)
+	self := a.dev.ID
+	a.mu.Unlock()
+	p := &a.peers
+	out := make([]TeamView, 0, len(teams))
+	for _, t := range teams {
+		v := TeamView{Team: t, Members: make([]TeamMemberView, 0, len(t.Members))}
+		for _, m := range t.Members {
+			mv := TeamMemberView{TeamMember: m, Self: m.ID == self}
+			p.mu.Lock()
+			mv.Online = p.presence[m.ID]
+			if x := p.find(m.ID); x != nil {
+				mv.Name = x.Name
+			}
+			p.mu.Unlock()
+			mv.Online = mv.Online || mv.Self
+			mv.Open = a.viewers.isOpen(m.ID)
+			v.Members = append(v.Members, mv)
+		}
+		// Çevrimiçi olanlar önce, sonra ada göre.
+		sort.SliceStable(v.Members, func(i, j int) bool {
+			if v.Members[i].Online != v.Members[j].Online {
+				return v.Members[i].Online
+			}
+			return strings.ToLower(v.Members[i].Label) < strings.ToLower(v.Members[j].Label)
+		})
+		out = append(out, v)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(out)
+}
+
+func (a *App) handleTeamOp(w http.ResponseWriter, r *http.Request) {
+	var body map[string]string
+	if err := readJSON(r, &body); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	switch body["op"] {
+	case "create", "join", "leave", "kick", "delete", "code":
+	default:
+		http.Error(w, "geçersiz işlem", 400)
+		return
+	}
+	op := map[string]string{}
+	for _, k := range []string{"op", "name", "code", "tid", "id"} {
+		if v := body[k]; v != "" {
+			op[k] = v
+		}
+	}
+	a.mu.Lock()
+	c := a.hubc
+	a.mu.Unlock()
+	if c == nil {
+		http.Error(w, "Sunucuya bağlı değil.", 409)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	if err := c.TeamOp(ctx, op); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	writeOK(w)
 }
 
 // openForPeer: biri bu cihaza bağlanmak istedi. Tünel kapalıysa açar, adresini döner.
@@ -228,7 +356,8 @@ type Peer struct {
 	Fav    bool   `json:"fav"`
 	Last   int64  `json:"last"` // son bağlantı (unix ms)
 	Online bool   `json:"online"`
-	Open   bool   `json:"open"` // bu cihaza açık bir bağlantı penceresi var
+	Open   bool   `json:"open"`            // bu cihaza açık bir bağlantı penceresi var
+	Group  string `json:"group,omitempty"` // kullanıcının verdiği grup adı (ör. "Ofis")
 }
 
 type peerStore struct {
@@ -331,6 +460,7 @@ func (a *App) handlePeerSave(w http.ResponseWriter, r *http.Request) {
 		ID     string  `json:"id"`
 		Name   *string `json:"name"`
 		Fav    *bool   `json:"fav"`
+		Group  *string `json:"group"`
 		Delete bool    `json:"delete"`
 	}
 	if err := readJSON(r, &body); err != nil {
@@ -368,6 +498,9 @@ func (a *App) handlePeerSave(w http.ResponseWriter, r *http.Request) {
 		}
 		if body.Fav != nil {
 			x.Fav = *body.Fav
+		}
+		if body.Group != nil {
+			x.Group = cleanLabel(*body.Group)
 		}
 	}
 	p.saveLocked()
