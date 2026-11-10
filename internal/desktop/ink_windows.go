@@ -45,6 +45,7 @@ type inkLine struct {
 	pts   []point // pencere koordinatı
 	ended time.Time
 	done  bool
+	upd   time.Time // son nokta (bağlantısı kopan kişinin lazeri ekranda kalmasın)
 }
 
 var (
@@ -151,7 +152,7 @@ func inkProc(hwnd, m, wp, lp uintptr) uintptr {
 		inkMu.Lock()
 		changed, laser := false, false
 		for id, l := range inkLines {
-			if l.laser && l.done && now.Sub(l.ended) > inkLaserLife {
+			if l.laser && ((l.done && now.Sub(l.ended) > inkLaserLife) || now.Sub(l.upd) > 5*time.Second) {
 				delete(inkLines, id)
 				inkOrder = removeID(inkOrder, id)
 				changed = true
@@ -263,8 +264,9 @@ func inkAdd(id string, laser bool, color string, width int, dx, dy, dw, dh int, 
 		y := int32(dy+pts[i+1]*dh/10000) - vy
 		l.pts = append(l.pts, point{x, y})
 	}
+	l.upd = time.Now()
 	if end {
-		l.done, l.ended = true, time.Now()
+		l.done, l.ended = true, l.upd
 	}
 	inkMu.Unlock()
 	procPostMessageW.Call(inkHwnd, wmAppInkSync, 0, 0)
