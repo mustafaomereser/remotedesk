@@ -1101,7 +1101,8 @@ function inkMessage(m) {
     strokes.set(m.id, st);
   }
   for (const v of m.p) st.p.push(v);
-  if (m.e) { st.e = true; st.t = performance.now(); }
+  st.u = performance.now();
+  if (m.e) { st.e = true; st.t = st.u; }
   inkDirty = true;
 }
 
@@ -1189,7 +1190,8 @@ function inkFrame(now) {
   let fading = false;
   for (const [id, st] of strokes) {
     if (st.tool !== 'laser') continue;
-    if (st.e && now - st.t > LASER_LIFE) { strokes.delete(id); inkDirty = true; } else fading = true;
+    // Bitmiş lazer söner; bağlantısı kopan kişinin yarım kalan lazeri 5 sn sonra silinir.
+    if ((st.e && now - st.t > LASER_LIFE) || (!st.e && !st.mine && now - (st.u || 0) > 5000)) { strokes.delete(id); inkDirty = true; } else fading = true;
   }
   if (!inkDirty && !fading) return;
   inkDirty = false;
