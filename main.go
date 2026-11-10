@@ -16,7 +16,7 @@ import (
 )
 
 // appVersion, sürüm paketlerinde (scripts/build-release.sh) kullanılır.
-const appVersion = "0.1.6"
+const appVersion = "0.1.7"
 
 func dataDir() string {
 	if runtime.GOOS == "windows" {

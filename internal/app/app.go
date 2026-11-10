@@ -672,6 +672,10 @@ func writeOK(w http.ResponseWriter) {
 
 func (a *App) openUI() {
 	url := "http://" + a.uiAddr + "/"
+	if openNativeWindow(url, a.opts.DataDir, a.Quit) {
+		log.Printf("arayüz uygulama penceresinde açıldı")
+		return
+	}
 	start := time.Now()
 	cmd, err := openAppWindow(url, filepath.Join(a.opts.DataDir, "browser"))
 	if err != nil {

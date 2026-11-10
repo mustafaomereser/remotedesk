@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -126,5 +127,8 @@ func Restart() error {
 	if app == "" {
 		return errors.New("uygulama paketi bulunamadı")
 	}
-	return exec.Command("/bin/sh", "-c", `sleep 2; open -n "$0"`, app).Start()
+	// Eski süreç tamamen bitmeden açmak LaunchServices'te -47 (dosya meşgul) hatası verebiliyor:
+	// süreç çıkana kadar bekle, sonra aç.
+	script := `i=0; while kill -0 "$1" 2>/dev/null && [ $i -lt 100 ]; do sleep 0.2; i=$((i+1)); done; sleep 1; open "$0"`
+	return exec.Command("/bin/sh", "-c", script, app, strconv.Itoa(os.Getpid())).Start()
 }

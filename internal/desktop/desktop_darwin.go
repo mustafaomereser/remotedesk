@@ -34,6 +34,7 @@ var (
 	dispatchMainQ      uintptr
 	mainCallback       uintptr
 	mainReady          bool
+	msgSendAddr        uintptr
 	mainJobs           = make(chan func(), 256)
 
 	// objc_msgSend'in kullandığımız imzaları (struct/float argümanları için tipli kayıt gerekir)
@@ -128,6 +129,7 @@ func setupApp() uintptr {
 	if err != nil {
 		return 0
 	}
+	msgSendAddr = send
 	for _, fn := range []any{&msgID, &msgID1, &msgBool, &msgInt, &msgFloat, &msgColor, &msgInitWin, &msgSetRect, &msgFrame, &msgSize} {
 		purego.RegisterFunc(fn, send)
 	}
