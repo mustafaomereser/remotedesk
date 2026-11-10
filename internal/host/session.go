@@ -54,6 +54,10 @@ type session struct {
 	lastRoute  int
 	remotePos  atomic.Uint64 // uzaktaki kişinin son imleç konumu (x<<32 | y), 0 = yok
 
+	// Uyarlamalı bit hızı (H.264): bağlantı taşıyamıyorsa düşer, rahatsa kalite sınırına çıkar.
+	abrRate   int
+	abrUpNeed int // yükseltmeden önce gereken art arda "rahat" onay sayısı
+
 	quality     atomic.Int32
 	wantDisplay atomic.Int32 // -1: değişiklik yok
 	wantCodec   atomic.Int32
@@ -635,7 +639,7 @@ func (s *session) jpegLoop(ctx context.Context) error {
 			copy(prev, f.Pix)
 		}
 		free <- g
-		pf.report(ctx, s.c, fl, pw, ph)
+		pf.report(ctx, s.c, fl, pw, ph, 0)
 	}
 }
 
@@ -666,7 +670,13 @@ func (s *session) h264Loop(ctx context.Context) error {
 
 	ectx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	e, err := video.Start(ectx, bin, enc, inW, inH, outW, outH, maxFPS, video.BitrateFor(int(q)))
+	maxRate := video.BitrateFor(int(q))
+	if s.abrRate == 0 {
+		s.abrRate, s.abrUpNeed = min(maxRate, 6_000_000), 300
+	}
+	s.abrRate = min(s.abrRate, maxRate)
+	rate := s.abrRate
+	e, err := video.Start(ectx, bin, enc, inW, inH, outW, outH, maxFPS, rate)
 	if err != nil {
 		return fmt.Errorf("%w: %v", errVideoFailed, err)
 	}
@@ -738,6 +748,20 @@ func (s *session) h264Loop(ctx context.Context) error {
 		} else if restart || s.keyframe.Load() || s.quality.Load() != q {
 			return errRestart
 		}
+		// Bağlantıya göre bit hızı: onaylar gecikiyorsa (kuyruk büyüyor) bir basamak in,
+		// uzun süre rahatsa bir basamak çık. Her inişte çıkış için gereken süre iki katına çıkar.
+		if fl.badRun >= 30 {
+			if lower := video.StepRate(rate, -1); lower < rate {
+				s.abrRate, s.abrUpNeed = lower, min(s.abrUpNeed*2, 9600)
+				log.Printf("bit hızı düşürüldü: %.1f Mbps (gecikme %v, taban %v)", float64(lower)/1e6, fl.rtt.Round(time.Millisecond), fl.floor.Round(time.Millisecond))
+				return errRestart
+			}
+			fl.badRun = 0
+		} else if fl.goodRun >= s.abrUpNeed && rate < maxRate {
+			s.abrRate = min(video.StepRate(rate, +1), maxRate)
+			log.Printf("bit hızı yükseltildi: %.1f Mbps", float64(s.abrRate)/1e6)
+			return errRestart
+		}
 		if err := s.waitWindow(ctx, fl, s.vack, sendErr); err != nil {
 			return err
 		}
@@ -766,7 +790,7 @@ func (s *session) h264Loop(ctx context.Context) error {
 			free <- g
 			return errRestart
 		}
-		pf.report(ctx, s.c, fl, outW, outH)
+		pf.report(ctx, s.c, fl, outW, outH, rate)
 		send := true
 		if !bytes.Equal(f.Pix, prev) {
 			copy(prev, f.Pix)

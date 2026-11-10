@@ -32,6 +32,47 @@ type Server struct {
 	active    context.CancelFunc
 	fails     int
 	lockUntil time.Time
+	unauthed  int // henüz şifresini göndermemiş bağlantı sayısı
+}
+
+// maxUnauthed: aynı anda şifre aşamasında bekleyebilecek bağlantı sayısı. Tünel adresini
+// bilen biri yüzlerce bağlantı açıp kaynak tüketemesin ve kilidi paralel denemelerle aşamasın.
+const maxUnauthed = 8
+
+func (s *Server) enterAuth() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.unauthed >= maxUnauthed {
+		return false
+	}
+	s.unauthed++
+	return true
+}
+
+func (s *Server) leaveAuth() {
+	s.mu.Lock()
+	s.unauthed--
+	s.mu.Unlock()
+}
+
+// tryAuth, kilit kontrolü + şifre doğrulama + hata sayımını tek kilit altında yapar:
+// paralel bağlantılar 5 deneme sınırını aşamaz.
+func (s *Server) tryAuth(pw string) (ok, locked bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if time.Now().Before(s.lockUntil) {
+		return false, true
+	}
+	if s.Auth(pw) {
+		s.fails = 0
+		return true, false
+	}
+	s.fails++
+	if s.fails >= 5 {
+		s.fails = 0
+		s.lockUntil = time.Now().Add(time.Minute)
+	}
+	return false, false
 }
 
 type message struct {
@@ -115,30 +156,37 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	remote := remoteAddr(r)
 	var name string
 
-	actx, acancel := context.WithTimeout(ctx, 15*time.Second)
+	if !s.enterAuth() {
+		sendErr(ctx, c, "Sunucu meşgul. Biraz sonra tekrar dene.")
+		return
+	}
+	actx, acancel := context.WithTimeout(ctx, 10*time.Second)
 	var m message
 	err = wsjson.Read(actx, c, &m)
 	acancel()
 	if err != nil || m.T != "auth" {
+		s.leaveAuth()
 		return
 	}
+	ok, locked := s.tryAuth(m.Pw)
+	if !ok && !locked {
+		log.Printf("hatalı şifre denemesi: %s", remoteAddr(r))
+		time.Sleep(time.Second) // bu bağlantı şifre aşaması kotasını tutmaya devam eder
+	}
+	s.leaveAuth()
 	name = cleanName(m.Name)
 	if name == "" {
 		name = "Uzak kullanıcı"
 	}
 
-	if wait := s.lockedFor(); wait > 0 {
+	if locked {
 		sendErr(ctx, c, "Çok fazla hatalı deneme. Biraz sonra tekrar dene.")
 		return
 	}
-	if !s.Auth(m.Pw) {
-		s.recordFail()
-		log.Printf("hatalı şifre denemesi: %s", remote)
-		time.Sleep(time.Second)
+	if !ok {
 		sendErr(ctx, c, "Şifre yanlış.")
 		return
 	}
-	s.resetFails()
 
 	if !s.claim(cancel) {
 		sendErr(ctx, c, "Bu bilgisayara şu anda başka biri bağlı.")
@@ -175,28 +223,6 @@ func sendErr(ctx context.Context, c *websocket.Conn, msg string) {
 	defer cancel()
 	wsjson.Write(wctx, c, map[string]string{"t": "err", "msg": msg})
 	c.Close(websocket.StatusNormalClosure, "")
-}
-
-func (s *Server) lockedFor() time.Duration {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return time.Until(s.lockUntil)
-}
-
-func (s *Server) recordFail() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.fails++
-	if s.fails >= 5 {
-		s.fails = 0
-		s.lockUntil = time.Now().Add(time.Minute)
-	}
-}
-
-func (s *Server) resetFails() {
-	s.mu.Lock()
-	s.fails = 0
-	s.mu.Unlock()
 }
 
 func (s *Server) claim(cancel context.CancelFunc) bool {

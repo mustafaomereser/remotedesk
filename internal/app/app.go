@@ -101,6 +101,11 @@ type App struct {
 	quitOnce sync.Once
 
 	tunnelReq chan bool // arayüzden "Tüneli aç / kapat"
+
+	// uiToken: yerel arayüz API'sinin oturum anahtarı. Pencere "/?k=<anahtar>" ile açılır,
+	// sunucu bunu çereze çevirir; çerezi olmayan (başka kullanıcı, başka süreç, başka site)
+	// istekler /api/* uçlarına erişemez.
+	uiToken string
 }
 
 func New(o Options) *App {
@@ -110,6 +115,7 @@ func New(o Options) *App {
 	}
 	a := &App{
 		tunnelReq: make(chan bool, 4),
+		uiToken:   randString(32, "abcdef0123456789"),
 		opts:      o,
 		subs:      map[chan []byte]struct{}{},
 		pending:   map[string]chan bool{},
@@ -587,6 +593,22 @@ func (a *App) guard(h http.Handler) http.Handler {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
+		if r.URL.Path == "/" && r.URL.Query().Get("k") != "" {
+			if subtle.ConstantTimeCompare([]byte(r.URL.Query().Get("k")), []byte(a.uiToken)) != 1 {
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
+			http.SetCookie(w, &http.Cookie{Name: "rd", Value: a.uiToken, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode})
+			http.Redirect(w, r, "/", http.StatusSeeOther)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			c, err := r.Cookie("rd")
+			if err != nil || subtle.ConstantTimeCompare([]byte(c.Value), []byte(a.uiToken)) != 1 {
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
+		}
 		if r.Method != http.MethodGet {
 			if o := r.Header.Get("Origin"); o != "" && o != "http://"+a.uiAddr {
 				http.Error(w, "forbidden", http.StatusForbidden)
@@ -740,7 +762,7 @@ func writeOK(w http.ResponseWriter) {
 // ---- pencere ----
 
 func (a *App) openUI() {
-	url := "http://" + a.uiAddr + "/"
+	url := "http://" + a.uiAddr + "/?k=" + a.uiToken
 	if openNativeWindow(url, a.opts.DataDir, a.Quit) {
 		log.Printf("arayüz uygulama penceresinde açıldı")
 		return

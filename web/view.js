@@ -313,7 +313,7 @@ function renderDisplays(list, cur) {
     sel.appendChild(o);
   });
   sel.value = String(cur);
-  sel.classList.toggle('hidden', list.length < 2);
+  $('displayRow').classList.toggle('hidden', list.length < 2);
 }
 
 $('display').onchange = (e) => {
@@ -364,13 +364,14 @@ setInterval(() => {
   const codec = mode === 'h264' ? 'H.264' + (encoderName ? ' ' + encoderName.replace('h264_', '') : '') : 'JPEG';
   let host = '';
   if (hostStat) {
-    host = ` · kaynak ${Math.round(hostStat.fps)} fps, yakalama ${hostStat.cap.toFixed(0)} ms, ${hostStat.w}×${hostStat.h}`;
+    host = `
+Karşı taraf: ${hostStat.fps.toFixed(1)} kare/sn üretiyor, ekran yakalama ortalama ${hostStat.cap.toFixed(1)} ms, ` +
+      `${hostStat.w}×${hostStat.h}, kare gecikmesi ${hostStat.rtt} ms, yolda en fazla ${hostStat.win} kare` +
+      (hostStat.br ? `, hedef bit hızı ${(hostStat.br / 1e6).toFixed(1)} Mbps (bağlantıya göre ayarlanır).` : '.');
   }
-  $('vStat').textContent = `${codec} · ${frames} fps · ${r} · ${Math.round(bytes / 1024)} KB/s${host}`;
-  $('vStat').title = hostStat
-    ? `Karşı taraf: ${hostStat.fps.toFixed(1)} kare/sn üretiyor, ekran yakalama ortalama ${hostStat.cap.toFixed(1)} ms, ` +
-      `gidiş-dönüş ${hostStat.rtt} ms, yolda en fazla ${hostStat.win} kare.`
-    : '';
+  const mbps = (bytes * 8 / 1e6).toFixed(1);
+  $('vStat').textContent = `${frames} fps · ${r} · ${mbps} Mbps`;
+  $('vStat').title = `${codec} · ${frames} fps · gecikme ${r} · ${mbps} Mbps${host}`;
   frames = 0;
   bytes = 0;
 }, 1000);
@@ -477,13 +478,22 @@ $('quality').onchange = (e) => {
   canvas.focus();
 };
 
-$('scale').onclick = (e) => {
-  const fit = canvas.classList.toggle('fit');
+$('scale').onchange = (e) => {
+  const fit = !e.target.checked;
+  canvas.classList.toggle('fit', fit);
   $('stage').classList.toggle('native', !fit);
-  e.target.textContent = fit ? 'Gerçek boyut' : 'Sığdır';
   e.target.blur();
   canvas.focus();
 };
+
+// Ayarlar menüsü: dışarı tıklayınca veya Esc ile kapanır.
+document.addEventListener('pointerdown', (e) => {
+  const d = $('vset');
+  if (d.open && !d.contains(e.target)) d.open = false;
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && $('vset').open && document.activeElement !== canvas) $('vset').open = false;
+});
 
 $('fs').onclick = async (e) => {
   e.target.blur();

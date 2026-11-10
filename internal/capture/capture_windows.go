@@ -5,7 +5,9 @@ package capture
 import (
 	"errors"
 	"fmt"
+	"log"
 	"sync"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -129,6 +131,10 @@ type Capturer struct {
 	oldBmp   uintptr
 	w, h     int
 	frame    Frame
+
+	dx      *dxgiDup
+	dxRetry time.Time
+	dxLog   bool
 }
 
 func New() (*Capturer, error) {
@@ -183,6 +189,9 @@ func (c *Capturer) Capture(d Display) (*Frame, error) {
 	if err := c.ensure(d.W, d.H); err != nil {
 		return nil, err
 	}
+	if c.dxgiCapture(d) {
+		return &c.frame, nil
+	}
 	r, _, err := procBitBlt.Call(c.memDC, 0, 0, uintptr(d.W), uintptr(d.H), c.screenDC, uintptr(d.X), uintptr(d.Y), srcCopy)
 	if r == 0 {
 		return nil, fmt.Errorf("BitBlt: %v", err)
@@ -190,6 +199,39 @@ func (c *Capturer) Capture(d Display) (*Frame, error) {
 	c.drawCursor(d)
 	procGdiFlush.Call()
 	return &c.frame, nil
+}
+
+// dxgiCapture, kareyi DXGI ile DIB'e alır. false dönerse çağıran GDI ile devam eder.
+func (c *Capturer) dxgiCapture(d Display) bool {
+	if c.dx != nil && c.dx.display != d {
+		c.dx.close()
+		c.dx = nil
+	}
+	if c.dx == nil {
+		if time.Now().Before(c.dxRetry) {
+			return false
+		}
+		if c.dx = openDup(d); c.dx == nil {
+			c.dxRetry = time.Now().Add(2 * time.Second)
+			return false
+		}
+		if !c.dxLog {
+			c.dxLog = true
+			log.Printf("capture: DXGI Desktop Duplication %dx%d", d.W, d.H)
+		}
+	}
+	switch c.dx.grab(c.frame.Pix, d.W, d.H, 40*time.Millisecond) {
+	case dxgiNew:
+		c.drawCursor(d)
+		procGdiFlush.Call()
+		return true
+	case dxgiSame:
+		return true // ekran ve imleç değişmedi: DIB'deki kare hâlâ geçerli
+	}
+	c.dx.close()
+	c.dx = nil
+	c.dxRetry = time.Now().Add(time.Second)
+	return false
 }
 
 func (c *Capturer) drawCursor(d Display) {
@@ -217,6 +259,10 @@ func (c *Capturer) drawCursor(d Display) {
 }
 
 func (c *Capturer) Close() {
+	if c.dx != nil {
+		c.dx.close()
+		c.dx = nil
+	}
 	c.freeBitmap()
 	if c.memDC != 0 {
 		procDeleteDC.Call(c.memDC)

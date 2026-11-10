@@ -18,6 +18,12 @@ type flow struct {
 	rtt      time.Duration // üstel ortalama (gösterim için; kuyruk süresini de içerir)
 	base     time.Duration // son birkaç saniyedeki en düşük RTT ≈ kuyruksuz gerçek gecikme
 	baseAt   time.Time
+
+	// Uyarlamalı bit hızı için: bu kodlayıcıyla görülen en düşük gecikme ve art arda
+	// "kuyruk büyüyor" / "rahat" onay sayıları.
+	floor   time.Duration
+	badRun  int
+	goodRun int
 }
 
 func newFlow(fps int) *flow { return &flow{interval: time.Second / time.Duration(fps)} }
@@ -39,6 +45,19 @@ func (f *flow) onAck() {
 	// pencere büyür). En düşük RTT kuyruktan etkilenmez; ağ değişirse 5 sn'de bir tazelenir.
 	if f.base == 0 || d < f.base || time.Since(f.baseAt) > 5*time.Second {
 		f.base, f.baseAt = d, time.Now()
+	}
+	if f.floor == 0 || d < f.floor {
+		f.floor = d
+	}
+	switch {
+	case d > f.floor+150*time.Millisecond:
+		f.badRun++
+		f.goodRun = 0
+	case d < f.floor+50*time.Millisecond:
+		f.goodRun++
+		f.badRun = 0
+	default:
+		f.badRun = 0
 	}
 }
 
@@ -71,7 +90,7 @@ type perf struct {
 func (p *perf) capture(d time.Duration) { p.capSum += d; p.caps++ }
 func (p *perf) frame()                  { p.frames++ }
 
-func (p *perf) report(ctx context.Context, c *websocket.Conn, fl *flow, w, h int) {
+func (p *perf) report(ctx context.Context, c *websocket.Conn, fl *flow, w, h, bitrate int) {
 	el := time.Since(p.start)
 	if p.start.IsZero() {
 		p.start = time.Now()
@@ -91,6 +110,7 @@ func (p *perf) report(ctx context.Context, c *websocket.Conn, fl *flow, w, h int
 		"rtt":  fl.rtt.Milliseconds(),
 		"base": fl.base.Milliseconds(),
 		"win":  fl.limit(),
+		"br":   bitrate,
 		"w":    w, "h": h,
 	})
 	*p = perf{start: time.Now()}

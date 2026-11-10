@@ -14,18 +14,27 @@
       <span id="vStat" class="stat mono"></span>
     </div>
     <div class="vctl">
-      <select id="display" title="Monitör" class="hidden"></select>
-      <label class="vcheck" title="Panoyu (kopyala/yapıştır) iki yönlü senkronize et"><input type="checkbox" id="clipSync" checked> Pano</label>
-      <select id="codec" title="Görüntü sıkıştırma: H.264 akıcı ve az bant genişliği kullanır, JPEG her yerde çalışır">
-        <option value="h264">H.264</option>
-        <option value="jpeg">JPEG</option>
-      </select>
-      <select id="quality" title="Görüntü kalitesi">
-        <option value="40">Hızlı</option>
-        <option value="65" selected>Dengeli</option>
-        <option value="85">Kaliteli</option>
-      </select>
-      <button id="scale" class="small">Gerçek boyut</button>
+      <details id="vset" class="vset">
+        <summary>Ayarlar</summary>
+        <div class="vset-pop">
+          <label class="vrow hidden" id="displayRow"><span>Monitör</span><select id="display" title="Monitör"></select></label>
+          <label class="vrow" title="H.264 akıcıdır ve az bant genişliği kullanır, JPEG her yerde çalışır"><span>Sıkıştırma</span>
+            <select id="codec">
+              <option value="h264">H.264</option>
+              <option value="jpeg">JPEG</option>
+            </select>
+          </label>
+          <label class="vrow"><span>Kalite</span>
+            <select id="quality">
+              <option value="40">Hızlı</option>
+              <option value="65" selected>Dengeli</option>
+              <option value="85">Kaliteli</option>
+            </select>
+          </label>
+          <label class="vrow" title="Panoyu (kopyala/yapıştır) iki yönlü senkronize et"><span>Pano paylaşımı</span><input type="checkbox" class="switch" id="clipSync" checked></label>
+          <label class="vrow"><span>Gerçek boyut</span><input type="checkbox" class="switch" id="scale"></label>
+        </div>
+      </details>
       <button id="fs" class="small">Tam ekran</button>
       <button id="disc" class="danger small">Bağlantıyı kes</button>
     </div>
