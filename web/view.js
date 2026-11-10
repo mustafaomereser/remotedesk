@@ -51,10 +51,23 @@ function takeConnection() {
 const webMode = location.pathname === '/';
 if (webMode) document.body.classList.add('web');
 
-const conn = webMode ? null : takeConnection();
-if (conn) connect(conn);
-else if (webMode) showWebLogin();
-else showOverlay('Bağlantı bilgisi bulunamadı. Bu pencereyi ana pencereden açmalısın.', true);
+(async () => {
+  if (webMode) { showWebLogin(); return; }
+  let conn = null;
+  const key = new URLSearchParams(location.search).get('k');
+  if (key) {
+    // Uygulamanın açtığı pencere: bilgiler tek kullanımlık anahtarla bir kez alınır.
+    try {
+      const r = await fetch('/api/viewer/take?k=' + encodeURIComponent(key));
+      if (r.ok) conn = await r.json();
+    } catch {}
+    history.replaceState(null, '', 'view.html');
+  } else {
+    conn = takeConnection();
+  }
+  if (conn) connect(conn);
+  else showOverlay('Bağlantı bilgisi bulunamadı. Bu pencereyi ana pencereden açmalısın.', true);
+})();
 
 function showWebLogin(err) {
   overlay.classList.add('hidden');
@@ -83,6 +96,7 @@ $('webLogin').onsubmit = (e) => {
 async function connect({ id, pw, name, label }) {
   label = label || id;
   document.title = label + ' · RemoteDesk';
+  if (window.rdSetTitle) window.rdSetTitle(document.title);
   $('vTitle').textContent = label;
 
   let target = id;

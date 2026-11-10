@@ -145,6 +145,7 @@ type App struct {
 	upd      *update.Release
 
 	rtcSubs map[chan []byte]struct{} // sesli görüşme sinyali dinleyen ana pencere(ler)
+	viewers viewerSet
 }
 
 func New(o Options) *App {
@@ -578,6 +579,8 @@ func (a *App) uiHandler() http.Handler {
 	mux.HandleFunc("GET /api/events", a.handleEvents)
 	mux.HandleFunc("POST /api/host/password", a.handlePassword)
 	mux.HandleFunc("POST /api/settings", a.handleSettings)
+	mux.HandleFunc("POST /api/viewer/open", a.handleViewerOpen)
+	mux.HandleFunc("GET /api/viewer/take", a.handleViewerTake)
 	mux.HandleFunc("GET /api/rtc/events", a.handleRTCEvents)
 	mux.HandleFunc("POST /api/rtc", a.handleRTCSend)
 	mux.HandleFunc("POST /api/settings/fixedpw", a.handleFixedPassword)

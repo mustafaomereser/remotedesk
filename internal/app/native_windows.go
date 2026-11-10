@@ -5,37 +5,27 @@ package app
 import (
 	"log"
 	"path/filepath"
-	"runtime"
 
-	webview2 "github.com/jchv/go-webview2"
+	"remotedesk/internal/frame"
+	"remotedesk/web"
 )
 
-// openNativeWindow, arayüzü uygulamanın kendi penceresinde (WebView2) açar.
-// WebView2 çalışma zamanı yoksa false döner (çağıran tarayıcıya düşer).
-// window.open ile açılan viewer pencerelerini WebView2 kendisi oluşturur.
-func openNativeWindow(url, dataDir string, onClose func()) bool {
-	res := make(chan bool, 1)
-	go func() {
-		runtime.LockOSThread()
-		w := webview2.NewWithOptions(webview2.WebViewOptions{
-			DataPath:  filepath.Join(dataDir, "webview"),
-			AutoFocus: true,
-			WindowOptions: webview2.WindowOptions{
-				Title:  "RemoteDesk",
-				Width:  980,
-				Height: 700,
-				Center: true,
-			},
-		})
-		if w == nil {
-			log.Printf("WebView2 başlatılamadı")
-			res <- false
-			return
-		}
-		w.Navigate(url)
-		res <- true
-		w.Run()
-		onClose()
-	}()
-	return <-res
+func init() {
+	frame.Icon, _ = web.FS.ReadFile("icon.png")
 }
+
+// openNativeWindow, arayüzü uygulamanın kendi çerçevesiz penceresinde (WebView2) açar.
+// WebView2 çalışma zamanı yoksa false döner (çağıran tarayıcıya düşer).
+func openNativeWindow(url, dataDir string, onClose func()) bool {
+	_, err := frame.Open(frame.Options{
+		URL: url, Title: "RemoteDesk", W: 1000, H: 720, MinW: 420, MinH: 480,
+		DataDir: filepath.Join(dataDir, "webview"), OnClose: onClose,
+	})
+	if err != nil {
+		log.Printf("uygulama penceresi açılamadı: %v", err)
+		return false
+	}
+	return true
+}
+
+func viewerDataDir(dataDir string) string { return filepath.Join(dataDir, "webview") }

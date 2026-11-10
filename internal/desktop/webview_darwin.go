@@ -27,8 +27,9 @@ var (
 )
 
 type wvEntry struct {
-	view uintptr
-	main bool
+	view    uintptr
+	main    bool
+	onClose func()
 }
 
 func loadWebKit() bool {
@@ -109,6 +110,15 @@ func newWebWindow(cfg uintptr, title string, w, h float64, main bool) (win, view
 	win = msgInitWin(msgID(class("NSWindow"), sel("alloc")), sel("initWithContentRect:styleMask:backing:defer:"),
 		r, titled|closable|miniaturizable|resizable, buffered, false)
 	msgBool(win, sel("setReleasedWhenClosed:"), false)
+	// Koyu, saydam başlık çubuğu: pencere arka planı uygulamanın rengi (#111113) olur,
+	// trafik ışıkları ve sürükleme macOS'un kendisinde kalır.
+	if ap := msgID1(class("NSAppearance"), sel("appearanceNamed:"), nsString("NSAppearanceNameDarkAqua")); ap != 0 {
+		msgID1(win, sel("setAppearance:"), ap)
+	}
+	msgBool(win, sel("setTitlebarAppearsTransparent:"), true)
+	if bg := msgColor(class("NSColor"), sel("colorWithSRGBRed:green:blue:alpha:"), 0x11/255.0, 0x11/255.0, 0x13/255.0, 1); bg != 0 {
+		msgID1(win, sel("setBackgroundColor:"), bg)
+	}
 	msgID1(win, sel("setTitle:"), nsString(title))
 	msgID1(win, sel("setDelegate:"), wvDelegate)
 
@@ -165,6 +175,9 @@ func wvWindowWillClose(self objc.ID, _ objc.SEL, note objc.ID) {
 		}
 		return
 	}
+	if e.onClose != nil {
+		go e.onClose()
+	}
 	// Viewer penceresi: web görünümünü bırak ki bağlantı (WebSocket) hemen kapansın.
 	msgID1(win, sel("setContentView:"), 0)
 	msgID(e.view, sel("release"))
@@ -212,4 +225,71 @@ func setupMenu() {
 	}
 	sub(bar, edit)
 	msgID1(app, sel("setMainMenu:"), bar)
+}
+
+// OpenWebWindow, ikincil bir pencere (bağlantı penceresi) açar. Dönen tanıtıcı
+// FocusWebWindow / CloseWebWindow ile kullanılır; pencere kapanınca onClose çağrılır.
+func OpenWebWindow(url, title string, w, h float64, onClose func()) (uintptr, bool) {
+	if !mainReady {
+		return 0, false
+	}
+	type result struct {
+		win uintptr
+		ok  bool
+	}
+	res := make(chan result, 1)
+	onMain(func() {
+		if !loadWebKit() {
+			res <- result{}
+			return
+		}
+		cfg := msgID(msgID(class("WKWebViewConfiguration"), sel("alloc")), sel("init"))
+		win, view := newWebWindow(cfg, title, w, h, false)
+		wvMu.Lock()
+		e := wvWindows[win]
+		e.onClose = onClose
+		wvWindows[win] = e
+		wvMu.Unlock()
+		msgID1(win, sel("center"), 0)
+		u := msgID1(class("NSURL"), sel("URLWithString:"), nsString(url))
+		msgID1(view, sel("loadRequest:"), msgID1(class("NSURLRequest"), sel("requestWithURL:"), u))
+		msgID1(win, sel("makeKeyAndOrderFront:"), 0)
+		app := msgID(class("NSApplication"), sel("sharedApplication"))
+		msgBool(app, sel("activateIgnoringOtherApps:"), true)
+		res <- result{win, true}
+	})
+	select {
+	case r := <-res:
+		return r.win, r.ok
+	case <-time.After(5 * time.Second):
+		return 0, false
+	}
+}
+
+// FocusWebWindow, pencereyi öne getirir (simge durumundaysa açar).
+func FocusWebWindow(win uintptr) {
+	onMain(func() {
+		wvMu.Lock()
+		_, ok := wvWindows[win]
+		wvMu.Unlock()
+		if !ok {
+			return
+		}
+		msgID1(win, sel("deminiaturize:"), 0)
+		msgID1(win, sel("makeKeyAndOrderFront:"), 0)
+		app := msgID(class("NSApplication"), sel("sharedApplication"))
+		msgBool(app, sel("activateIgnoringOtherApps:"), true)
+	})
+}
+
+// CloseWebWindow, pencereyi kapatır.
+func CloseWebWindow(win uintptr) {
+	onMain(func() {
+		wvMu.Lock()
+		_, ok := wvWindows[win]
+		wvMu.Unlock()
+		if ok {
+			msgID1(win, sel("performClose:"), 0)
+		}
+	})
 }

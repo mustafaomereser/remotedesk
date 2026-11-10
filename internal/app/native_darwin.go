@@ -8,3 +8,5 @@ import "remotedesk/internal/desktop"
 func openNativeWindow(url, dataDir string, onClose func()) bool {
 	return desktop.OpenAppWindow(url, "RemoteDesk", onClose)
 }
+
+func viewerDataDir(dataDir string) string { return "" }

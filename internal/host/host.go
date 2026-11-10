@@ -159,6 +159,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /view.js", page("view.js", "text/javascript; charset=utf-8"))
 	mux.HandleFunc("GET /style.css", page("style.css", "text/css; charset=utf-8"))
 	mux.HandleFunc("GET /rtc.js", page("rtc.js", "text/javascript; charset=utf-8"))
+	mux.HandleFunc("GET /titlebar.js", page("titlebar.js", "text/javascript; charset=utf-8"))
 	mux.HandleFunc("/", http.NotFound)
 	return mux
 }

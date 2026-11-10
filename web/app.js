@@ -361,9 +361,22 @@ function openWin(id) {
   return null;
 }
 
-function startConnection(id, pw) {
+async function startConnection(id, pw) {
   const label = /^\d{9}$/.test(id) ? fmtId(id) : id;
-  pendingConnections.push({ id, pw, name: $('myName').value.trim(), label });
+  const conn = { id, pw, name: $('myName').value.trim(), label };
+  // Uygulamanın kendi penceresi (çerçevesiz WebView2 / WKWebView). Yoksa tarayıcı penceresi.
+  try {
+    const r = await fetch('/api/viewer/open', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(conn),
+    });
+    if (r.ok) {
+      setTimeout(loadPeers, 1500);
+      return;
+    }
+  } catch {}
+  pendingConnections.push(conn);
   const w = window.open('view.html', 'rd_' + id.replace(/[^a-z0-9]/gi, '_'), 'popup=yes,width=1280,height=800');
   if (!w) {
     pendingConnections.pop();
@@ -432,7 +445,7 @@ function renderPeers() {
     const row = document.createElement('div');
     row.className = 'peer';
     row.tabIndex = 0;
-    const connectedWin = openWin(p.id);
+    const connectedWin = p.open || openWin(p.id);
 
     const dot = document.createElement('span');
     dot.className = 'dot ' + (p.online ? 'ok' : 'off');
@@ -486,6 +499,7 @@ function renderPeers() {
     row.appendChild(acts);
 
     const pick = () => {
+      if (p.open) { startConnection(p.id, ''); return; } // açık pencereyi öne getirir
       const w = openWin(p.id);
       if (w) { w.focus(); return; }
       $('remoteId').value = fmtId(p.id);

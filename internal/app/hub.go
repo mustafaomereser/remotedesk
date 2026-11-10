@@ -181,6 +181,7 @@ type Peer struct {
 	Fav    bool   `json:"fav"`
 	Last   int64  `json:"last"` // son bağlantı (unix ms)
 	Online bool   `json:"online"`
+	Open   bool   `json:"open"` // bu cihaza açık bir bağlantı penceresi var
 }
 
 type peerStore struct {
@@ -254,6 +255,7 @@ func (a *App) handlePeers(w http.ResponseWriter, r *http.Request) {
 	}
 	for i := range list {
 		list[i].Online = stat[list[i].ID]
+		list[i].Open = a.viewers.isOpen(list[i].ID)
 	}
 	// Favoriler önce, sonra en son bağlanılan.
 	sort.SliceStable(list, func(i, j int) bool {
