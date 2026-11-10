@@ -16,6 +16,7 @@ import (
 	"remotedesk/internal/capture"
 	"remotedesk/internal/clipboard"
 	"remotedesk/internal/input"
+	"remotedesk/internal/sysutil"
 	"remotedesk/internal/video"
 )
 
@@ -281,6 +282,18 @@ func (s *session) streamLoop(ctx context.Context) error {
 	s.lastEnum = time.Now()
 	if err := s.sendDisplays(ctx); err != nil {
 		return err
+	}
+
+	// macOS'ta izin yoksa görüntü sadece duvar kağıdıdır ve giriş çalışmaz; viewer'a söyle.
+	if screen, input := sysutil.PermissionStatus(); !screen || !input {
+		var msgs []string
+		if !screen {
+			msgs = append(msgs, "Karşı bilgisayarda Ekran Kaydı izni yok: pencereler görünmez, sadece masaüstü arka planı gelir.")
+		}
+		if !input {
+			msgs = append(msgs, "Karşı bilgisayarda Erişilebilirlik izni yok: fare ve klavye çalışmaz.")
+		}
+		wsjson.Write(ctx, s.c, map[string]any{"t": "warn", "msgs": msgs})
 	}
 
 	s.mode = "jpeg"

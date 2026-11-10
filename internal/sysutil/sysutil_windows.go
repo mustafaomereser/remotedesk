@@ -4,6 +4,7 @@
 package sysutil
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"syscall"
@@ -46,8 +47,13 @@ func HideWindow(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000} // CREATE_NO_WINDOW
 }
 
-// Permissions, eksik sistem izinleri için uyarı metinleri döner (Windows'ta gerekmez).
-func Permissions() []string { return nil }
+// Windows'ta ekran yakalama ve giriş için ayrıca izin gerekmez.
+func PermissionsNeeded() bool                  { return false }
+func PermissionStatus() (screen, input bool)   { return true, true }
+func RequestPermissions()                      {}
+func OpenPermissionSettings(kind string) error { return nil }
+func CanRestart() bool                         { return false }
+func Restart() error                           { return errors.New("desteklenmiyor") }
 
 // ConsoleUTF8, konsol çıktısını UTF-8 yapar (Türkçe karakterler için).
 func ConsoleUTF8() {

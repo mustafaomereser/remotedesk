@@ -192,6 +192,18 @@ body.viewer { display: flex; flex-direction: column; overflow: hidden; backgroun
   font-size: 12.5px;
 }
 
+.vwarn {
+  flex: none;
+  padding: 8px 12px;
+  background: #3a2a07;
+  border-bottom: 1px solid rgba(240, 180, 41, .5);
+  color: #f5cf6b;
+  font-size: 13px;
+}
+.vwarn div + div { margin-top: 2px; }
+
+.warn-actions { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+
 .stage {
   flex: 1; min-height: 0; position: relative; overflow: auto;
   display: flex; align-items: center; justify-content: center;

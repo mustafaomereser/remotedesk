@@ -49,6 +49,14 @@ type Pending struct {
 	Expires int64  `json:"expires"`
 }
 
+// Perms, macOS'taki Ekran Kaydı / Erişilebilirlik izinlerinin durumudur.
+type Perms struct {
+	Needed     bool `json:"needed"` // bu platformda izin gerekiyor mu
+	Screen     bool `json:"screen"`
+	Input      bool `json:"input"`
+	CanRestart bool `json:"canRestart"`
+}
+
 // State, arayüze SSE ile gönderilen anlık durumdur.
 type State struct {
 	Tunnel     string   `json:"tunnel"` // starting | downloading | on | error
@@ -58,7 +66,7 @@ type State struct {
 	AutoAccept bool     `json:"autoAccept"`
 	Session    *Session `json:"session"`
 	Pending    *Pending `json:"pending"`
-	Warnings   []string `json:"warnings"`
+	Perms      Perms    `json:"perms"`
 	Video      string   `json:"video"` // starting | downloading | on | error
 	VideoMsg   string   `json:"videoMsg"`
 }
@@ -104,11 +112,45 @@ func New(o Options) *App {
 		},
 	}
 	a.host = &host.Server{Auth: a.checkPassword, Confirm: a.confirm, OnSession: a.onSession, Video: a.videoInfo}
-	a.st.Warnings = sysutil.Permissions()
-	for _, w := range a.st.Warnings {
-		log.Printf("UYARI: %s", w)
+	if sysutil.PermissionsNeeded() {
+		sysutil.RequestPermissions()
+		a.st.Perms = currentPerms()
+		if !a.st.Perms.Screen {
+			log.Printf("UYARI: Ekran Kaydı izni yok")
+		}
+		if !a.st.Perms.Input {
+			log.Printf("UYARI: Erişilebilirlik izni yok")
+		}
 	}
 	return a
+}
+
+func currentPerms() Perms {
+	screen, input := sysutil.PermissionStatus()
+	return Perms{Needed: true, Screen: screen, Input: input, CanRestart: sysutil.CanRestart()}
+}
+
+// permLoop, kullanıcı Sistem Ayarları'nda izin verdiğinde arayüzü günceller.
+func (a *App) permLoop(ctx context.Context) {
+	if !sysutil.PermissionsNeeded() {
+		return
+	}
+	t := time.NewTicker(2 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		p := currentPerms()
+		a.mu.Lock()
+		if p != a.st.Perms {
+			a.st.Perms = p
+			a.broadcastLocked()
+		}
+		a.mu.Unlock()
+	}
 }
 
 func (a *App) Quit() { a.quitOnce.Do(func() { close(a.quit) }) }
@@ -129,6 +171,7 @@ func (a *App) Run() error {
 		close(tunDone)
 	}()
 	go a.videoSetup(ctx)
+	go a.permLoop(ctx)
 
 	if !a.opts.Headless {
 		ul, err := listenUI()
@@ -406,6 +449,28 @@ func (a *App) uiHandler() http.Handler {
 	mux.HandleFunc("POST /api/host/kick", func(w http.ResponseWriter, r *http.Request) {
 		a.host.Kick()
 		writeOK(w)
+	})
+	mux.HandleFunc("POST /api/perm/open", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Kind string `json:"kind"`
+		}
+		if err := readJSON(r, &body); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		if err := sysutil.OpenPermissionSettings(body.Kind); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		writeOK(w)
+	})
+	mux.HandleFunc("POST /api/restart", func(w http.ResponseWriter, r *http.Request) {
+		if err := sysutil.Restart(); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		writeOK(w)
+		go func() { time.Sleep(200 * time.Millisecond); a.Quit() }()
 	})
 	mux.HandleFunc("GET /api/clipboard", a.handleClipboardGet)
 	mux.HandleFunc("POST /api/clipboard", a.handleClipboardSet)

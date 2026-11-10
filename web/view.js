@@ -108,6 +108,17 @@ function onMessage(ev) {
       case 'notice':
         toast(m.msg);
         break;
+      case 'warn': {
+        const box = $('vwarn');
+        box.innerHTML = '';
+        for (const t of m.msgs || []) {
+          const d = document.createElement('div');
+          d.textContent = '⚠ ' + t;
+          box.appendChild(d);
+        }
+        box.classList.toggle('hidden', !(m.msgs && m.msgs.length));
+        break;
+      }
       case 'clip':
         if ($('clipSync').checked && typeof m.text === 'string') {
           lastClip = m.text;

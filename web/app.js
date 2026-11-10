@@ -59,14 +59,7 @@ function render(s) {
   $('vidMsg').textContent = s.videoMsg;
   $('autoAccept').checked = s.autoAccept;
 
-  const wb = $('warnings');
-  wb.innerHTML = '';
-  for (const w of s.warnings || []) {
-    const d = document.createElement('div');
-    d.className = 'warn';
-    d.textContent = w;
-    wb.appendChild(d);
-  }
+  renderPerms(s.perms || {});
 
   if (s.session) {
     $('sessionBox').classList.remove('hidden');
@@ -81,6 +74,56 @@ function render(s) {
   } else {
     $('modal').classList.add('hidden');
   }
+}
+
+// macOS izinleri: eksik olan her izin için ayarları açan düğme + yeniden başlatma.
+let permsKey = '';
+function renderPerms(p) {
+  const key = JSON.stringify(p);
+  if (key === permsKey) return; // her SSE güncellemesinde düğmeleri yeniden çizme
+  permsKey = key;
+  const wb = $('warnings');
+  wb.innerHTML = '';
+  if (!p.needed || (p.screen && p.input)) return;
+
+  const box = document.createElement('div');
+  box.className = 'warn';
+  const items = [];
+  if (!p.screen) items.push(['screen', 'Ekran Kaydı izni yok: karşı taraf pencereleri göremez, sadece masaüstü arka planını görür.']);
+  if (!p.input) items.push(['input', 'Erişilebilirlik izni yok: karşı taraf fare ve klavyeyi kullanamaz.']);
+  for (const [kind, text] of items) {
+    const row = document.createElement('div');
+    row.style.marginBottom = '6px';
+    row.textContent = text + ' ';
+    const b = document.createElement('button');
+    b.className = 'small';
+    b.textContent = kind === 'screen' ? 'Ekran Kaydı ayarını aç' : 'Erişilebilirlik ayarını aç';
+    b.onclick = () => api('perm/open', { kind }).catch((e) => toast(e.message));
+    row.appendChild(b);
+    box.appendChild(row);
+  }
+  const hint = document.createElement('div');
+  hint.textContent = 'Açılan listede RemoteDesk\'i aç (anahtarı yak). macOS izni uygulamayı yeniden başlatınca uygular.';
+  box.appendChild(hint);
+  if (p.canRestart) {
+    const actions = document.createElement('div');
+    actions.className = 'warn-actions';
+    const r = document.createElement('button');
+    r.className = 'primary small';
+    r.textContent = 'İzinleri verdim, yeniden başlat';
+    r.onclick = async () => {
+      try {
+        await api('restart');
+        toast('Yeniden başlatılıyor…');
+        setTimeout(() => window.close(), 400);
+      } catch (e) {
+        toast(e.message);
+      }
+    };
+    actions.appendChild(r);
+    box.appendChild(actions);
+  }
+  wb.appendChild(box);
 }
 
 setInterval(() => {

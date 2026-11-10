@@ -4,9 +4,12 @@
 package sysutil
 
 import (
+	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/ebitengine/purego"
 )
@@ -33,34 +36,95 @@ func (j *Job) Close() {}
 
 func KillWithParent(p *os.Process) (*Job, error) { return &Job{}, nil }
 
-// Permissions, Ekran Kaydı ve Erişilebilirlik izinlerini kontrol eder.
-// Eksikse sistemin izin penceresini tetikler ve uyarı metni döner.
-func Permissions() []string {
-	cg, err := purego.Dlopen("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics", purego.RTLD_NOW|purego.RTLD_GLOBAL)
-	if err != nil {
-		return []string{"CoreGraphics yüklenemedi: " + err.Error()}
-	}
-	get := func(name string) func() bool {
-		p, err := purego.Dlsym(cg, name)
+// ---- Ekran Kaydı / Erişilebilirlik izinleri ----
+
+var (
+	permOnce                   sync.Once
+	preScreen, reqScreen       func() bool
+	prePostEvent, reqPostEvent func() bool
+)
+
+func loadPerms() {
+	permOnce.Do(func() {
+		cg, err := purego.Dlopen("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics", purego.RTLD_NOW|purego.RTLD_GLOBAL)
 		if err != nil {
-			return nil
+			return
 		}
-		var f func() bool
-		purego.RegisterFunc(&f, p)
-		return f
-	}
-	var warns []string
-	if pre, req := get("CGPreflightScreenCaptureAccess"), get("CGRequestScreenCaptureAccess"); pre != nil && !pre() {
-		if req != nil {
-			req()
+		get := func(name string) func() bool {
+			p, err := purego.Dlsym(cg, name)
+			if err != nil {
+				return nil
+			}
+			var f func() bool
+			purego.RegisterFunc(&f, p)
+			return f
 		}
-		warns = append(warns, "Ekran Kaydı izni yok: Sistem Ayarları › Gizlilik ve Güvenlik › Ekran ve Sistem Ses Kaydı bölümünden izin ver (Terminal'den çalıştırıyorsan Terminal'e), sonra uygulamayı yeniden başlat.")
+		preScreen, reqScreen = get("CGPreflightScreenCaptureAccess"), get("CGRequestScreenCaptureAccess")
+		prePostEvent, reqPostEvent = get("CGPreflightPostEventAccess"), get("CGRequestPostEventAccess")
+	})
+}
+
+// PermissionsNeeded, bu platformda izin verilmesi gerekip gerekmediğini söyler.
+func PermissionsNeeded() bool { return true }
+
+// PermissionStatus, Ekran Kaydı ve Erişilebilirlik (olay gönderme) izinlerinin durumunu döner.
+// Not: macOS, izin verildikten sonra çoğu zaman uygulamanın yeniden başlatılmasını ister.
+func PermissionStatus() (screen, input bool) {
+	loadPerms()
+	screen, input = true, true
+	if preScreen != nil {
+		screen = preScreen()
 	}
-	if pre, req := get("CGPreflightPostEventAccess"), get("CGRequestPostEventAccess"); pre != nil && !pre() {
-		if req != nil {
-			req()
-		}
-		warns = append(warns, "Erişilebilirlik izni yok, fare/klavye kontrolü çalışmaz: Sistem Ayarları › Gizlilik ve Güvenlik › Erişilebilirlik bölümünden izin ver, sonra uygulamayı yeniden başlat.")
+	if prePostEvent != nil {
+		input = prePostEvent()
 	}
-	return warns
+	return
+}
+
+// RequestPermissions, eksik izinler için macOS'un izin penceresini tetikler
+// (uygulamayı Sistem Ayarları'ndaki listeye ekler).
+func RequestPermissions() {
+	screen, input := PermissionStatus()
+	if !screen && reqScreen != nil {
+		reqScreen()
+	}
+	if !input && reqPostEvent != nil {
+		reqPostEvent()
+	}
+}
+
+// OpenPermissionSettings, ilgili Sistem Ayarları sayfasını açar ("screen" veya "input").
+func OpenPermissionSettings(kind string) error {
+	pane := "Privacy_ScreenCapture"
+	if kind == "input" {
+		pane = "Privacy_Accessibility"
+	}
+	return exec.Command("open", "x-apple.systempreferences:com.apple.preference.security?"+pane).Start()
+}
+
+// appBundle, çalışan .app paketinin yolunu döner (paket dışından çalışıyorsa boş).
+func appBundle() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	exe, _ = filepath.EvalSymlinks(exe)
+	app := filepath.Dir(filepath.Dir(filepath.Dir(exe))) // .../X.app/Contents/MacOS/X
+	if strings.HasSuffix(app, ".app") {
+		return app
+	}
+	return ""
+}
+
+// CanRestart, uygulamanın kendini yeniden başlatıp başlatamayacağını söyler.
+func CanRestart() bool { return appBundle() != "" }
+
+// Restart, bu süreç kapandıktan kısa süre sonra uygulamayı yeniden açar.
+// Çağıran taraf ardından kendini kapatmalıdır.
+func Restart() error {
+	app := appBundle()
+	if app == "" {
+		return errors.New("uygulama paketi bulunamadı")
+	}
+	return exec.Command("/bin/sh", "-c", `sleep 2; open -n "$0"`, app).Start()
 }
