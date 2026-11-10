@@ -50,14 +50,43 @@ const conn = takeConnection();
 if (conn) connect(conn);
 else showOverlay('Bağlantı bilgisi bulunamadı. Bu pencereyi ana pencereden açmalısın.', true);
 
-function connect({ id, pw, name }) {
-  document.title = id + ' · RemoteDesk';
-  $('vTitle').textContent = id;
-  showOverlay('Bağlanıyor…');
+// Kalıcı ID ise önce sunucudan hedef cihazın o anki adresi istenir (cihaz bu sırada
+// tünelini açar). Yeni açılan tünelin erişilebilir olması birkaç saniye sürebildiği için
+// ilk bağlantı birkaç kez denenir.
+async function connect({ id, pw, name, label }) {
+  label = label || id;
+  document.title = label + ' · RemoteDesk';
+  $('vTitle').textContent = label;
 
-  ws = new WebSocket(wsURL(id));
+  let target = id;
+  let retries = 0;
+  if (/^\d{9}$/.test(id)) {
+    showOverlay('Karşı cihaza ulaşılıyor…');
+    try {
+      const r = await fetch('/api/resolve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
+      });
+      if (!r.ok) throw new Error((await r.text()).trim() || 'Bağlanılamadı.');
+      target = (await r.json()).url;
+      retries = 8;
+    } catch (e) {
+      failed = true;
+      showOverlay(e.message || 'Bağlanılamadı.', true);
+      return;
+    }
+  }
+  openSocket(target, pw, name, retries);
+}
+
+function openSocket(target, pw, name, retries) {
+  showOverlay('Bağlanıyor…');
+  let opened = false;
+  ws = new WebSocket(wsURL(target));
   ws.binaryType = 'arraybuffer';
   ws.onopen = async () => {
+    opened = true;
     showOverlay('Kimlik doğrulanıyor…');
     h264Supported = await checkH264();
     $('codec').querySelector('option[value=h264]').disabled = !h264Supported;
@@ -68,9 +97,14 @@ function connect({ id, pw, name }) {
     connected = false;
     clearInputs(false);
     if (failed) return;
+    if (!opened && retries > 0) {
+      showOverlay('Bağlantı hazırlanıyor…');
+      setTimeout(() => openSocket(target, pw, name, retries - 1), 1500);
+      return;
+    }
     showOverlay(everConnected
       ? 'Bağlantı kapandı.'
-      : 'Bağlanılamadı. ID doğru mu, karşı taraf çevrimiçi mi? (Yeni açılan tünellerin erişilebilir olması birkaç saniye sürebilir.)', true);
+      : 'Bağlanılamadı. ID doğru mu, karşı taraf çevrimiçi mi?', true);
   };
 }
 

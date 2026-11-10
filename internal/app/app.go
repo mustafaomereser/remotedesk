@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -39,6 +40,8 @@ type Options struct {
 	NoTunnel   bool
 	Password   string
 	Concurrent bool
+	// Server: buluşma sunucusunun adresi (https://…). Boşsa kalıcı ID / cihaz listesi kapalıdır.
+	Server string
 }
 
 type Session struct {
@@ -75,6 +78,11 @@ type State struct {
 	Perms      Perms    `json:"perms"`
 	Video      string   `json:"video"` // starting | downloading | on | error
 	VideoMsg   string   `json:"videoMsg"`
+
+	// Buluşma sunucusu: kalıcı cihaz ID'si ve bağlantı durumu.
+	DeviceID string `json:"deviceId"`
+	Hub      string `json:"hub"` // "" (kapalı) | connecting | online | error
+	HubMsg   string `json:"hubMsg"`
 }
 
 type App struct {
@@ -106,6 +114,10 @@ type App struct {
 	// sunucu bunu çereze çevirir; çerezi olmayan (başka kullanıcı, başka süreç, başka site)
 	// istekler /api/* uçlarına erişemez.
 	uiToken string
+
+	tunnelAuto   atomic.Bool  // tünel sunucu isteğiyle açıldı: boşta kalınca kapat
+	tunnelNeeded atomic.Int64 // tünelin en son gerektiği an (unix ns)
+	peers        peerStore
 }
 
 func New(o Options) *App {
@@ -130,6 +142,7 @@ func New(o Options) *App {
 		Auth: a.checkPassword, Confirm: a.confirm, OnSession: a.onSession,
 		Video: a.videoInfo, Concurrent: a.concurrent,
 	}
+	a.peers.load(o.DataDir)
 	if sysutil.PermissionsNeeded() {
 		sysutil.RequestPermissions()
 		a.st.Perms = currentPerms()
@@ -188,6 +201,7 @@ func (a *App) Run() error {
 		a.tunnelLoop(ctx)
 		close(tunDone)
 	}()
+	go a.hubLoop(ctx)
 	go a.videoSetup(ctx)
 	go a.permLoop(ctx)
 
@@ -273,6 +287,7 @@ func (a *App) concurrent() bool {
 }
 
 func (a *App) onSession(remote, name string, active bool) {
+	a.tunnelNeeded.Store(time.Now().UnixNano())
 	a.update(func(s *State) {
 		if active {
 			s.Session = &Session{Name: name, Remote: remote, Since: time.Now().UnixMilli()}
@@ -508,8 +523,11 @@ func (a *App) announce() {
 		return
 	}
 	a.mu.Lock()
-	id, pw := a.st.ID, a.st.Password
+	id, pw, dev := a.st.ID, a.st.Password, a.st.DeviceID
 	a.mu.Unlock()
+	if dev != "" {
+		fmt.Printf("\n  Cihaz : %s", dev)
+	}
 	fmt.Printf("\n  ID    : %s\n  Şifre : %s\n\n", id, pw)
 }
 
@@ -540,12 +558,16 @@ func (a *App) uiHandler() http.Handler {
 			http.Error(w, err.Error(), 400)
 			return
 		}
+		a.tunnelAuto.Store(false) // elle açılan tünel kendiliğinden kapanmaz
 		select {
 		case a.tunnelReq <- body.Value:
 		default:
 		}
 		writeOK(w)
 	})
+	mux.HandleFunc("GET /api/peers", a.handlePeers)
+	mux.HandleFunc("POST /api/peers", a.handlePeerSave)
+	mux.HandleFunc("POST /api/resolve", a.handleResolve)
 	mux.HandleFunc("GET /api/me", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"name": defaultName()})

@@ -360,3 +360,26 @@ body.fs .vbar:hover { transform: translate(-50%, 0); }
 }
 #warnings:empty { display: none; }
 body.fs .vbar:has(.vset[open]) { transform: translate(-50%, 0); }
+
+/* ---- kayıtlı cihazlar ---- */
+
+.peers { display: flex; flex-direction: column; gap: 6px; }
+.peers:empty { display: none; }
+.peer {
+  display: flex; align-items: center; gap: 12px; min-width: 0;
+  padding: 9px 8px 9px 14px;
+  border: 1px solid var(--line); border-radius: 12px;
+  cursor: pointer; transition: background .12s, border-color .12s;
+}
+.peer:hover { background: var(--surface); border-color: var(--line-2); }
+.peer-text { flex: 1; min-width: 0; }
+.peer-name { font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.peer-sub { font-size: 12px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.peer-text input { height: 32px; }
+.peer-acts { display: flex; gap: 2px; flex: none; }
+button.icon {
+  width: 30px; height: 30px; padding: 0; border-radius: 8px;
+  background: transparent; border-color: transparent; color: var(--faint); font-size: 14px;
+}
+button.icon:hover { background: var(--surface-2); color: var(--text); border-color: transparent; }
+button.icon.on { color: var(--warn); }

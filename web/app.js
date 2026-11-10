@@ -46,21 +46,51 @@ function connectEvents() {
   };
 }
 
+const fmtId = (id) => id.replace(/(\d{3})(?=\d)/g, '$1 ');
+
+// Başkasına verilecek ID: sunucu varsa kalıcı ID, yoksa (ya da sunucu yokken) tünel adresi.
+function myShownId(s) {
+  if (s.hub && s.deviceId && (s.hub === 'online' || !s.id)) return s.deviceId;
+  return s.id || (s.hub ? s.deviceId : '') || '';
+}
+
 function render(s) {
   state = s;
-  $('myId').textContent = s.id || (s.tunnel === 'off' ? 'Bağlantı almak için tüneli aç' : 'Hazırlanıyor…');
-  $('myId').classList.toggle('off', !s.id);
+  // Kalıcı ID (sunucu açıksa) ya da geçici tünel adresi.
+  const hubOn = !!s.hub;
+  const local = (s.tunnelMsg || '').startsWith('Yerel mod');
+  const shown = myShownId(s);
+  $('myId').textContent = shown
+    ? (/^\d{9}$/.test(shown) ? fmtId(shown) : shown)
+    : hubOn ? 'Hazırlanıyor…' : s.tunnel === 'off' ? 'Bağlantı almak için tüneli aç' : 'Hazırlanıyor…';
+  $('myId').classList.toggle('off', !shown);
   const tb = $('tunBtn');
-  tb.classList.toggle('hidden', (s.tunnelMsg || '').startsWith('Yerel mod'));
+  // Sunucu çevrimiçiyken tünel kendiliğinden açılır; düğme yalnızca yedek yol olarak görünür.
+  tb.classList.toggle('hidden', local || (hubOn && s.hub === 'online' && !!s.deviceId));
   tb.textContent = s.tunnel === 'off' ? 'Tüneli aç' : 'Tüneli kapat';
-  tb.classList.toggle('primary', s.tunnel === 'off');
-  $('idCopy').classList.toggle('hidden', !s.id);
+  tb.classList.toggle('primary', s.tunnel === 'off' && !hubOn);
+  $('idCopy').classList.toggle('hidden', !shown);
+  let hint = '';
+  if (hubOn && s.deviceId && s.hub === 'online') {
+    hint = 'Bu ID kalıcıdır. Biri bağlanmak istediğinde bağlantı kendiliğinden açılır.';
+  } else if (hubOn && s.deviceId) {
+    hint = 'Sunucuya ulaşılamıyor; ID ile bağlantı alınamaz. İstersen tüneli açıp geçici adresi ver' +
+      (s.id ? ': ' + s.id : '.');
+  } else if (hubOn) {
+    hint = 'Sunucuya ulaşılamıyor. Geçici adresle bağlantı almak için tüneli aç.';
+  }
+  $('idHint').textContent = hint;
   $('myPw').textContent = showPw ? s.password : '•'.repeat(s.password.length);
   $('pwShow').textContent = showPw ? 'Gizle' : 'Göster';
 
   const dot = $('tunDot');
-  dot.className = 'dot ' + (s.tunnel === 'on' ? 'ok' : s.tunnel === 'error' ? 'err' : s.tunnel === 'off' ? 'off' : 'busy');
-  $('tunMsg').textContent = s.tunnelMsg;
+  if (hubOn) {
+    dot.className = 'dot ' + (s.hub === 'online' ? 'ok' : s.hub === 'error' ? 'err' : 'busy');
+    $('tunMsg').textContent = s.hubMsg + (s.tunnel === 'on' ? ' · bağlantı açık' : s.tunnel === 'starting' ? ' · bağlantı açılıyor' : '');
+  } else {
+    dot.className = 'dot ' + (s.tunnel === 'on' ? 'ok' : s.tunnel === 'error' ? 'err' : s.tunnel === 'off' ? 'off' : 'busy');
+    $('tunMsg').textContent = s.tunnelMsg;
+  }
   $('vidDot').className = 'dot ' + (s.video === 'on' ? 'ok' : s.video === 'error' ? 'err' : 'busy');
   $('vidMsg').textContent = s.videoMsg;
   $('autoAccept').checked = s.autoAccept;
@@ -151,7 +181,7 @@ setInterval(() => {
 // ---- bu bilgisayar ----
 
 $('tunBtn').onclick = () => api('host/tunnel', { value: state.tunnel === 'off' }).catch((e) => toast(e.message));
-$('idCopy').onclick = () => copy(state && state.id, 'ID');
+$('idCopy').onclick = () => copy(state && myShownId(state), 'ID');
 $('pwCopy').onclick = () => copy(state && state.password, 'Şifre');
 $('pwShow').onclick = () => { showPw = !showPw; if (state) render(state); };
 $('pwNew').onclick = () => api('host/password', {}).then(() => toast('Yeni şifre üretildi')).catch((e) => toast(e.message));
@@ -202,34 +232,26 @@ function normalizeId(raw) {
   return id.toLowerCase();
 }
 
-function loadRecent() {
-  try { return JSON.parse(localStorage.getItem('recent') || '[]'); } catch { return []; }
+// Açık bağlantı pencereleri: id -> pencere. Aynı cihaza ikinci kez tıklanınca o pencereye geçilir.
+const openWins = new Map();
+function openWin(id) {
+  const w = openWins.get(id);
+  if (w && !w.closed) return w;
+  openWins.delete(id);
+  return null;
 }
 
-function saveRecent(id) {
-  const list = [id, ...loadRecent().filter((x) => x !== id)].slice(0, 5);
-  try { localStorage.setItem('recent', JSON.stringify(list)); } catch {}
-  renderRecent();
-}
-
-function renderRecent() {
-  const box = $('recent');
-  box.innerHTML = '';
-  const list = loadRecent();
-  if (!list.length) return;
-  const h = document.createElement('div');
-  h.className = 'recent-head';
-  h.textContent = 'Son bağlantılar';
-  box.appendChild(h);
-  for (const id of list) {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.className = 'recent-item';
-    b.innerHTML = '<span class="mono"></span><span class="muted">Seç</span>';
-    b.firstChild.textContent = id;
-    b.onclick = () => { $('remoteId').value = id; $('remotePw').focus(); };
-    box.appendChild(b);
+function startConnection(id, pw) {
+  const label = /^\d{9}$/.test(id) ? fmtId(id) : id;
+  pendingConnections.push({ id, pw, name: $('myName').value.trim(), label });
+  const w = window.open('view.html', 'rd_' + id.replace(/[^a-z0-9]/gi, '_'), 'popup=yes,width=1280,height=800');
+  if (!w) {
+    pendingConnections.pop();
+    $('connectErr').textContent = 'Pencere açılamadı.';
+    return;
   }
+  openWins.set(id, w);
+  setTimeout(loadPeers, 3000);
 }
 
 $('connectForm').onsubmit = (e) => {
@@ -238,20 +260,124 @@ $('connectForm').onsubmit = (e) => {
   const id = normalizeId($('remoteId').value);
   const pw = $('remotePw').value;
   if (!id) return;
-  if (state && id === state.id) {
+  if (state && (id === state.id || id === state.deviceId)) {
     $('connectErr').textContent = 'Bu, bu bilgisayarın kendi ID\'si.';
     return;
   }
-  pendingConnections.push({ id, pw, name: $('myName').value.trim() });
-  const w = window.open('view.html', '_blank', 'popup=yes,width=1280,height=800');
-  if (!w) {
-    pendingConnections.pop();
-    $('connectErr').textContent = 'Pencere açılamadı.';
-    return;
-  }
+  const w = openWin(id);
+  if (w) { w.focus(); return; }
+  startConnection(id, pw);
   $('remotePw').value = '';
-  saveRecent(id);
 };
 
-renderRecent();
+// ---- kayıtlı cihazlar ----
+
+let peers = [];
+let editing = null; // adı düzenlenen cihazın ID'si
+
+async function loadPeers() {
+  try {
+    const r = await fetch('/api/peers');
+    if (!r.ok) return;
+    peers = await r.json();
+    if (!editing) renderPeers();
+  } catch {}
+}
+
+function savePeer(body) {
+  return api('peers', body).then(loadPeers).catch((e) => toast(e.message));
+}
+
+function iconBtn(text, title, onclick) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'icon';
+  b.textContent = text;
+  b.title = title;
+  b.onclick = (e) => { e.stopPropagation(); onclick(); };
+  return b;
+}
+
+function renderPeers() {
+  const box = $('peers');
+  box.innerHTML = '';
+  if (!peers.length) return;
+  const h = document.createElement('div');
+  h.className = 'recent-head';
+  h.textContent = 'Cihazlar';
+  box.appendChild(h);
+
+  for (const p of peers) {
+    const row = document.createElement('div');
+    row.className = 'peer';
+    row.tabIndex = 0;
+    const connectedWin = openWin(p.id);
+
+    const dot = document.createElement('span');
+    dot.className = 'dot ' + (p.online ? 'ok' : 'off');
+    dot.title = p.online ? 'Çevrimiçi' : 'Çevrimdışı';
+    row.appendChild(dot);
+
+    const text = document.createElement('div');
+    text.className = 'peer-text';
+    if (editing === p.id) {
+      const inp = document.createElement('input');
+      inp.type = 'text';
+      inp.maxLength = 40;
+      inp.value = p.name || '';
+      inp.placeholder = 'Cihaz adı';
+      inp.onclick = (e) => e.stopPropagation();
+      const done = (save) => {
+        if (editing !== p.id) return;
+        editing = null;
+        if (save) savePeer({ id: p.id, name: inp.value }); else renderPeers();
+      };
+      inp.onkeydown = (e) => {
+        e.stopPropagation();
+        if (e.key === 'Enter') done(true);
+        if (e.key === 'Escape') done(false);
+      };
+      inp.onblur = () => done(true);
+      text.appendChild(inp);
+      setTimeout(() => inp.focus(), 0);
+    } else {
+      const name = document.createElement('div');
+      name.className = 'peer-name';
+      name.textContent = p.name || fmtId(p.id);
+      const sub = document.createElement('div');
+      sub.className = 'peer-sub';
+      sub.textContent = (p.name ? fmtId(p.id) + ' · ' : '') +
+        (connectedWin ? 'bağlısın' : p.online ? 'çevrimiçi' : 'çevrimdışı');
+      text.append(name, sub);
+    }
+    row.appendChild(text);
+
+    const acts = document.createElement('div');
+    acts.className = 'peer-acts';
+    const star = iconBtn(p.fav ? '★' : '☆', p.fav ? 'Favorilerden çıkar' : 'Favorilere ekle',
+      () => savePeer({ id: p.id, fav: !p.fav }));
+    if (p.fav) star.classList.add('on');
+    acts.append(
+      star,
+      iconBtn('✎', 'Ad ver', () => { editing = p.id; renderPeers(); }),
+      iconBtn('✕', 'Listeden kaldır', () => savePeer({ id: p.id, delete: true })),
+    );
+    row.appendChild(acts);
+
+    const pick = () => {
+      const w = openWin(p.id);
+      if (w) { w.focus(); return; }
+      $('remoteId').value = fmtId(p.id);
+      $('remotePw').value = '';
+      $('remotePw').focus();
+      if (!p.online) toast('Bu cihaz şu an çevrimdışı görünüyor');
+    };
+    row.onclick = pick;
+    row.onkeydown = (e) => { if (e.key === 'Enter' && e.target === row) pick(); };
+    box.appendChild(row);
+  }
+}
+
+loadPeers();
+setInterval(loadPeers, 5000);
 connectEvents();

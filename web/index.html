@@ -33,6 +33,7 @@
             <button class="small" id="tunBtn">Tüneli aç</button>
           </div>
         </div>
+        <div id="idHint" class="hint"></div>
       </div>
 
       <div class="cred">
@@ -97,7 +98,7 @@
       <form id="connectForm" class="form" autocomplete="off">
         <div class="field">
           <label for="remoteId">ID</label>
-          <input id="remoteId" type="text" placeholder="ornek-kelime-kelime-kelime" spellcheck="false" required>
+          <input id="remoteId" type="text" placeholder="123 456 789" spellcheck="false" required>
         </div>
         <div class="field">
           <label for="remotePw">Şifre</label>
@@ -111,7 +112,7 @@
         <button class="primary block" type="submit">Bağlan</button>
         <div id="connectErr" class="error-text"></div>
       </form>
-      <div id="recent" class="recent"></div>
+      <div id="peers" class="peers"></div>
     </section>
   </main>
 
