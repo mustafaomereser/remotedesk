@@ -16,3 +16,8 @@ package main
 // Kendi sunucunu kurmak için: cd server && npx wrangler deploy, çıkan adresi buraya yaz.
 // Çalışırken değiştirmek için: RemoteDesk -server https://... (boş vermek: -server "").
 const HubServer = ""
+
+// UpdateRepo, güncellemelerin denetlendiği GitHub deposudur ("sahip/ad").
+// Uygulama açılınca ve 6 saatte bir son sürüme bakar; yeni sürüm varsa arayüzde
+// "Güncelle" düğmesi çıkar. Boş bırakılırsa güncelleme denetimi kapalıdır.
+const UpdateRepo = "mustafaomereser/remotedesk"

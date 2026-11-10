@@ -16,6 +16,8 @@ import (
 	"os/signal"
 	"os/user"
 	"path/filepath"
+	"remotedesk/internal/hub"
+	"remotedesk/internal/update"
 	"strconv"
 	"strings"
 	"sync"
@@ -42,6 +44,10 @@ type Options struct {
 	Concurrent bool
 	// Server: buluşma sunucusunun adresi (https://…). Boşsa kalıcı ID / cihaz listesi kapalıdır.
 	Server string
+	// UpdateRepo: güncellemelerin denetlendiği GitHub deposu ("sahip/ad"). Boşsa kapalı.
+	UpdateRepo string
+	// Version: çalışan sürüm (güncelleme karşılaştırması için).
+	Version string
 }
 
 type Session struct {
@@ -83,6 +89,18 @@ type State struct {
 	DeviceID string `json:"deviceId"`
 	Hub      string `json:"hub"` // "" (kapalı) | connecting | online | error
 	HubMsg   string `json:"hubMsg"`
+
+	// Online: gelen bağlantılara açık mı (sunucuya bağlı / tünel açık).
+	Online         bool `json:"online"`
+	OnlineAtStart  bool `json:"onlineAtStart"`
+	AllowControl   bool `json:"allowControl"`
+	AllowClipboard bool `json:"allowClipboard"`
+	FixedPassword  bool `json:"fixedPassword"` // sabit şifre ayarlı mı (şifrenin kendisi gönderilmez)
+
+	Elevated   bool        `json:"elevated"`   // Windows: yönetici olarak çalışıyor
+	CanElevate bool        `json:"canElevate"` // "Yönetici olarak yeniden başlat" sunulabilir
+	Version    string      `json:"version"`
+	Update     *UpdateInfo `json:"update"`
 }
 
 type App struct {
@@ -118,6 +136,11 @@ type App struct {
 	tunnelAuto   atomic.Bool  // tünel sunucu isteğiyle açıldı: boşta kalınca kapat
 	tunnelNeeded atomic.Int64 // tünelin en son gerektiği an (unix ns)
 	peers        peerStore
+
+	set      Settings      // kalıcı ayarlar (mu ile korunur)
+	dev      hub.Device    // sunucudaki kimlik (mu ile korunur)
+	onlineCh chan struct{} // çevrimiçi durumu ya da ID değişti: sunucu bağlantısını yeniden değerlendir
+	upd      *update.Release
 }
 
 func New(o Options) *App {
@@ -127,6 +150,7 @@ func New(o Options) *App {
 	}
 	a := &App{
 		tunnelReq: make(chan bool, 4),
+		onlineCh:  make(chan struct{}, 1),
 		uiToken:   randString(32, "abcdef0123456789"),
 		opts:      o,
 		subs:      map[chan []byte]struct{}{},
@@ -135,12 +159,22 @@ func New(o Options) *App {
 		st: State{
 			Tunnel: "starting", TunnelMsg: "Başlatılıyor…",
 			Video: "starting", VideoMsg: "H.264 hazırlanıyor…",
-			Password: pw, AutoAccept: o.AutoAccept, Concurrent: o.Concurrent,
+			Password: pw, Version: o.Version,
+			Elevated: sysutil.IsElevated(), CanElevate: sysutil.CanElevate(),
 		},
 	}
+	a.set = a.loadSettings()
+	if o.AutoAccept {
+		a.set.AutoAccept = true
+	}
+	if o.Concurrent {
+		a.set.Concurrent = true
+	}
+	a.syncStateLocked()
+	a.st.Online = a.set.OnlineAtStart || o.Headless
 	a.host = &host.Server{
 		Auth: a.checkPassword, Confirm: a.confirm, OnSession: a.onSession,
-		Video: a.videoInfo, Concurrent: a.concurrent,
+		Video: a.videoInfo, Concurrent: a.concurrent, Perms: a.permissions,
 	}
 	a.peers.load(o.DataDir)
 	if sysutil.PermissionsNeeded() {
@@ -202,6 +236,7 @@ func (a *App) Run() error {
 		close(tunDone)
 	}()
 	go a.hubLoop(ctx)
+	go a.updateLoop(ctx)
 	go a.videoSetup(ctx)
 	go a.permLoop(ctx)
 
@@ -273,17 +308,10 @@ func (a *App) broadcastLocked() {
 	}
 }
 
-func (a *App) checkPassword(pw string) bool {
-	a.mu.Lock()
-	want := a.st.Password
-	a.mu.Unlock()
-	return subtle.ConstantTimeCompare([]byte(pw), []byte(want)) == 1
-}
-
 func (a *App) concurrent() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.st.Concurrent
+	return a.set.Concurrent
 }
 
 func (a *App) onSession(remote, name string, active bool) {
@@ -299,7 +327,7 @@ func (a *App) onSession(remote, name string, active bool) {
 
 func (a *App) confirm(ctx context.Context, remote, name string) bool {
 	a.mu.Lock()
-	if a.st.AutoAccept {
+	if a.set.AutoAccept {
 		a.mu.Unlock()
 		return true
 	}
@@ -438,7 +466,9 @@ func (a *App) tunnelLoop(ctx context.Context) {
 			s.Tunnel, s.ID, s.TunnelMsg = "off", "", "Tünel kapalı"
 		})
 	}
-	if a.opts.Headless {
+	// Sunucusuz modda "gelen bağlantılara açık" = tünel açık. Sunuculu modda tünel ancak
+	// biri bağlanmak isteyince açılır (hub.go).
+	if a.isOnline() && (a.opts.Server == "" || a.opts.Headless) {
 		start()
 	} else {
 		setOff()
@@ -538,18 +568,12 @@ func (a *App) uiHandler() http.Handler {
 	mux.Handle("GET /", http.FileServerFS(web.FS))
 	mux.HandleFunc("GET /api/events", a.handleEvents)
 	mux.HandleFunc("POST /api/host/password", a.handlePassword)
-	mux.HandleFunc("POST /api/host/autoaccept", a.handleAutoAccept)
-	mux.HandleFunc("POST /api/host/concurrent", func(w http.ResponseWriter, r *http.Request) {
-		var body struct {
-			Value bool `json:"value"`
-		}
-		if err := readJSON(r, &body); err != nil {
-			http.Error(w, err.Error(), 400)
-			return
-		}
-		a.update(func(s *State) { s.Concurrent = body.Value })
-		writeOK(w)
-	})
+	mux.HandleFunc("POST /api/settings", a.handleSettings)
+	mux.HandleFunc("POST /api/settings/fixedpw", a.handleFixedPassword)
+	mux.HandleFunc("POST /api/settings/rename", a.handleRename)
+	mux.HandleFunc("POST /api/elevate", a.handleElevate)
+	mux.HandleFunc("POST /api/update/check", a.handleUpdateCheck)
+	mux.HandleFunc("POST /api/update/install", a.handleUpdateInstall)
 	mux.HandleFunc("POST /api/host/tunnel", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Value bool `json:"value"`
@@ -559,9 +583,13 @@ func (a *App) uiHandler() http.Handler {
 			return
 		}
 		a.tunnelAuto.Store(false) // elle açılan tünel kendiliğinden kapanmaz
-		select {
-		case a.tunnelReq <- body.Value:
-		default:
+		if a.opts.Server == "" {
+			a.setOnline(body.Value)
+		} else {
+			select {
+			case a.tunnelReq <- body.Value:
+			default:
+			}
 		}
 		writeOK(w)
 	})
@@ -702,18 +730,6 @@ func (a *App) handlePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.update(func(s *State) { s.Password = pw })
-	writeOK(w)
-}
-
-func (a *App) handleAutoAccept(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Value bool `json:"value"`
-	}
-	if err := readJSON(r, &body); err != nil {
-		http.Error(w, err.Error(), 400)
-		return
-	}
-	a.update(func(s *State) { s.AutoAccept = body.Value })
 	writeOK(w)
 }
 

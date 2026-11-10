@@ -23,10 +23,29 @@ import (
 	"github.com/coder/websocket"
 )
 
-var idRe = regexp.MustCompile(`^[1-9]\d{8}$`)
+var (
+	numRe    = regexp.MustCompile(`^[1-9]\d{8}$`)
+	customRe = regexp.MustCompile(`^[a-z][a-z0-9-]{2,22}[a-z0-9]$`)
+)
 
-// ValidID, s kalıcı cihaz ID'si biçimindeyse (9 hane) true döner.
-func ValidID(s string) bool { return idRe.MatchString(s) }
+// ValidID, s kalıcı cihaz ID'si biçimindeyse true döner: 9 haneli sayı ya da
+// kullanıcının seçtiği ad (harfle başlar, küçük harf/rakam/tire, 4-24 karakter).
+func ValidID(s string) bool { return numRe.MatchString(s) || customRe.MatchString(s) }
+
+// NormalizeID, kullanıcının yazdığı ID'yi karşılaştırılabilir biçime getirir
+// ("123 456 789" -> "123456789", "Mustafa-PC" -> "mustafa-pc").
+func NormalizeID(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if d := strings.Map(func(r rune) rune {
+		if r == ' ' || r == ' ' {
+			return -1
+		}
+		return r
+	}, s); numRe.MatchString(d) {
+		return d
+	}
+	return s
+}
 
 // Device, bu bilgisayarın sunucudaki kimliğidir. Secret yalnızca bu cihazda durur;
 // sunucu özetini saklar.
@@ -89,11 +108,31 @@ func LoadDevice(ctx context.Context, dataDir, server string) (Device, error) {
 		return Device{}, errors.New("Sunucu geçersiz ID verdi.")
 	}
 	d.ID = out.ID
-	b, _ := json.MarshalIndent(d, "", "  ")
-	if err := os.WriteFile(path, b, 0o600); err != nil {
+	if err := d.Save(dataDir); err != nil {
 		return Device{}, err
 	}
 	return d, nil
+}
+
+// Save, kimliği veri klasörüne yazar (yalnızca bu kullanıcı okuyabilir).
+func (d Device) Save(dataDir string) error {
+	b, _ := json.MarshalIndent(d, "", "  ")
+	return os.WriteFile(filepath.Join(dataDir, "device.json"), b, 0o600)
+}
+
+// Rename, cihazın ID'sini değiştirir. newID boşsa sunucu rastgele yeni bir ID verir.
+func Rename(ctx context.Context, d Device, newID string) (string, error) {
+	var out struct {
+		ID string `json:"id"`
+	}
+	err := postJSON(ctx, d.Server+"/rename", map[string]string{"id": d.ID, "secret": d.Secret, "newId": newID}, &out)
+	if err != nil {
+		return "", err
+	}
+	if !ValidID(out.ID) {
+		return "", errors.New("Sunucu geçersiz ID verdi.")
+	}
+	return out.ID, nil
 }
 
 // Status, verilen ID'lerin çevrimiçi olup olmadığını sorar.

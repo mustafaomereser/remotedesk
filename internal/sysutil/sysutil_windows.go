@@ -4,7 +4,6 @@
 package sysutil
 
 import (
-	"errors"
 	"os"
 	"os/exec"
 	"syscall"
@@ -52,8 +51,6 @@ func PermissionsNeeded() bool                  { return false }
 func PermissionStatus() (screen, input bool)   { return true, true }
 func RequestPermissions()                      {}
 func OpenPermissionSettings(kind string) error { return nil }
-func CanRestart() bool                         { return false }
-func Restart() error                           { return errors.New("desteklenmiyor") }
 
 // ConsoleUTF8, konsol çıktısını UTF-8 yapar (Türkçe karakterler için).
 func ConsoleUTF8() {

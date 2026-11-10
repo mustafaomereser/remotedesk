@@ -48,28 +48,67 @@ func (a *App) hubLoop(ctx context.Context) {
 		}
 	}
 	log.Printf("hub: cihaz ID %s", dev.ID)
-	a.update(func(s *State) { s.DeviceID = dev.ID })
+	a.mu.Lock()
+	a.dev = dev
+	a.st.DeviceID = dev.ID
+	a.broadcastLocked()
+	a.mu.Unlock()
 	a.announce()
 	go a.tunnelIdleLoop(ctx)
 
-	c := &hub.Client{
-		Dev:    dev,
-		OnOpen: a.openForPeer,
-		OnState: func(online bool) {
-			a.update(func(s *State) {
-				if online {
-					s.Hub, s.HubMsg = "online", "Çevrimiçi"
-				} else {
-					s.Hub, s.HubMsg = "connecting", "Sunucuya yeniden bağlanılıyor…"
-				}
-			})
-		},
+	// Sunucu bağlantısı yalnızca "gelen bağlantılara açık" iken tutulur. Kapalıyken
+	// cihaz sunucuda çevrimdışı görünür ve kimse bağlanamaz. ID değişince yeniden kurulur.
+	var stop context.CancelFunc
+	var done chan struct{}
+	halt := func() {
+		if stop != nil {
+			stop()
+			<-done
+			stop = nil
+		}
 	}
-	c.Run(ctx)
+	defer halt()
+	for {
+		halt()
+		a.mu.Lock()
+		on, d := a.st.Online, a.dev
+		a.mu.Unlock()
+		if on {
+			cctx, cancel := context.WithCancel(ctx)
+			stop, done = cancel, make(chan struct{})
+			c := &hub.Client{
+				Dev:    d,
+				OnOpen: a.openForPeer,
+				OnState: func(online bool) {
+					a.update(func(s *State) {
+						if online {
+							s.Hub, s.HubMsg = "online", "Çevrimiçi"
+						} else if cctx.Err() == nil {
+							s.Hub, s.HubMsg = "connecting", "Sunucuya yeniden bağlanılıyor…"
+						}
+					})
+				},
+			}
+			go func(d chan struct{}) {
+				c.Run(cctx)
+				close(d)
+			}(done)
+		} else {
+			a.update(func(s *State) { s.Hub, s.HubMsg = "offline", "Bağlantılara kapalı" })
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-a.onlineCh:
+		}
+	}
 }
 
 // openForPeer: biri bu cihaza bağlanmak istedi. Tünel kapalıysa açar, adresini döner.
 func (a *App) openForPeer(ctx context.Context) (string, error) {
+	if !a.isOnline() {
+		return "", errors.New("Karşı cihaz bağlantılara kapalı.")
+	}
 	a.tunnelNeeded.Store(time.Now().UnixNano())
 	if a.opts.NoTunnel {
 		return "http://" + a.hostAddr, nil
@@ -188,14 +227,7 @@ func (p *peerStore) touch(id string) {
 	p.saveLocked()
 }
 
-func cleanPeerID(s string) string {
-	return strings.Map(func(r rune) rune {
-		if r >= '0' && r <= '9' {
-			return r
-		}
-		return -1
-	}, s)
-}
+func cleanPeerID(s string) string { return hub.NormalizeID(s) }
 
 func (a *App) handlePeers(w http.ResponseWriter, r *http.Request) {
 	p := &a.peers
@@ -247,7 +279,7 @@ func (a *App) handlePeerSave(w http.ResponseWriter, r *http.Request) {
 	}
 	id := cleanPeerID(body.ID)
 	if !hub.ValidID(id) {
-		http.Error(w, "Geçersiz ID (9 haneli olmalı).", 400)
+		http.Error(w, "Geçersiz ID.", 400)
 		return
 	}
 	p := &a.peers

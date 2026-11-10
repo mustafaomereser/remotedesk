@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
+	"time"
 
 	"github.com/ebitengine/purego"
 )
@@ -131,4 +133,22 @@ func Restart() error {
 	// süreç çıkana kadar bekle, sonra aç.
 	script := `i=0; while kill -0 "$1" 2>/dev/null && [ $i -lt 100 ]; do sleep 0.2; i=$((i+1)); done; sleep 1; open "$0"`
 	return exec.Command("/bin/sh", "-c", script, app, strconv.Itoa(os.Getpid())).Start()
+}
+
+// SecureDesktopActive: macOS'ta karşılığı yok (kilit ekranı yakalamada boş görüntü verir).
+func SecureDesktopActive() bool { return false }
+
+// IsElevated / CanElevate: macOS'ta yönetici olarak çalıştırma yok (izinler TCC ile verilir).
+func IsElevated() bool       { return false }
+func CanElevate() bool       { return false }
+func RestartElevated() error { return errors.New("desteklenmiyor") }
+
+// WaitPID, verilen süreç kapanana kadar (en çok 15 sn) bekler.
+func WaitPID(pid int) {
+	for i := 0; i < 75; i++ {
+		if syscall.Kill(pid, 0) != nil {
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 }

@@ -8,6 +8,10 @@
 //   GET  /host?id=..          (WebSocket, Authorization: Bearer <secret>)  cihazın kalıcı bağlantısı
 //   GET  /status?ids=a,b,c                        -> {a:true, b:false}
 //   POST /connect             {id}                -> {url}   (cihaza "tünel aç" der, adresi bekler)
+//   POST /rename              {id, secret, newId} -> {id}    (newId boşsa rastgele yeni ID)
+//
+// ID biçimi: 9 haneli sayı (rastgele) ya da kullanıcının seçtiği ad (harfle başlar,
+// küçük harf/rakam/tire, 4-24 karakter; ör. "mustafa-pc").
 
 const PING_STALE_MS = 100_000; // cihaz 30 sn'de bir ping atar; bu kadar sessizse çevrimdışı say
 const CONNECT_WAIT_MS = 40_000;
@@ -37,7 +41,8 @@ function sameString(a, b) {
   return r === 0;
 }
 
-const validId = (s) => typeof s === "string" && /^[1-9]\d{8}$/.test(s);
+const validId = (s) => typeof s === "string" && (/^[1-9]\d{8}$/.test(s) || /^[a-z][a-z0-9-]{2,22}[a-z0-9]$/.test(s));
+const RESERVED = new Set(["admin", "root", "remotedesk", "support", "destek", "help", "test", "system", "server"]);
 
 export class Hub {
   constructor(state, env) {
@@ -87,6 +92,8 @@ export class Hub {
           return this.status(url, ip);
         case "/connect":
           return await this.connect(req, ip);
+        case "/rename":
+          return await this.rename(req, ip);
         case "/":
           return new Response("RemoteDesk hub\n");
       }
@@ -115,6 +122,40 @@ export class Hub {
       }
     }
     return json({ error: "ID üretilemedi" }, 503);
+  }
+
+  async rename(req, ip) {
+    if (req.method !== "POST") return json({ error: "yöntem" }, 405);
+    if (this.limited("rn:" + ip, 10, 3600_000)) return json({ error: "Çok fazla ID değişikliği. Bir saat sonra tekrar dene." }, 429);
+    const body = await req.json().catch(() => null);
+    if (!body || !validId(body.id) || typeof body.secret !== "string") return json({ error: "geçersiz istek" }, 400);
+    const dev = await this.state.storage.get("dev:" + body.id);
+    if (!dev || !sameString(dev.hash, await sha256hex(body.secret))) return json({ error: "yetkisiz" }, 401);
+
+    let newId = typeof body.newId === "string" ? body.newId.trim().toLowerCase() : "";
+    if (newId) {
+      if (!validId(newId) || /^\d+$/.test(newId)) {
+        return json({ error: "ID harfle başlamalı; küçük harf, rakam ve tire içerebilir (4-24 karakter)." }, 400);
+      }
+      if (RESERVED.has(newId)) return json({ error: "Bu ID kullanılamaz." }, 409);
+      if (newId === body.id) return json({ id: newId });
+      if ((await this.state.storage.get("dev:" + newId)) !== undefined) return json({ error: "Bu ID başkası tarafından alınmış." }, 409);
+    } else {
+      for (let i = 0; i < 20 && !newId; i++) {
+        const buf = new Uint32Array(1);
+        crypto.getRandomValues(buf);
+        const id = String(100_000_000 + (buf[0] % 900_000_000));
+        if ((await this.state.storage.get("dev:" + id)) === undefined) newId = id;
+      }
+      if (!newId) return json({ error: "ID üretilemedi" }, 503);
+    }
+    await this.state.storage.put("dev:" + newId, { hash: dev.hash, created: dev.created, renamed: Date.now() });
+    await this.state.storage.delete("dev:" + body.id);
+    // Eski ID ile açık bağlantı kapanır; cihaz yeni ID ile yeniden bağlanır.
+    for (const ws of this.state.getWebSockets(body.id)) {
+      try { ws.close(4001, "id degisti"); } catch {}
+    }
+    return json({ id: newId });
   }
 
   async host(req, url) {

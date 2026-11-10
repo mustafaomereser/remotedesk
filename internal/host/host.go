@@ -17,8 +17,11 @@ import (
 )
 
 type Server struct {
-	// Auth, verilen şifre doğruysa true döner.
-	Auth func(pw string) bool
+	// Auth şifreyi doğrular. unattended=true ise sabit (gözetimsiz erişim) şifresiyle
+	// gelinmiştir: bağlantı onay sorulmadan kabul edilir.
+	Auth func(pw string) (ok, unattended bool)
+	// Perms, bağlanan kişinin o anki izinlerini döner (oturum boyunca canlı okunur).
+	Perms func() Perms
 	// Confirm, kullanıcıdan bağlantı onayı ister (nil ise otomatik kabul).
 	Confirm func(ctx context.Context, remote, name string) bool
 	// OnSession, oturum başladığında/bittiğinde çağrılır.
@@ -57,22 +60,28 @@ func (s *Server) leaveAuth() {
 
 // tryAuth, kilit kontrolü + şifre doğrulama + hata sayımını tek kilit altında yapar:
 // paralel bağlantılar 5 deneme sınırını aşamaz.
-func (s *Server) tryAuth(pw string) (ok, locked bool) {
+func (s *Server) tryAuth(pw string) (ok, unattended, locked bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if time.Now().Before(s.lockUntil) {
-		return false, true
+		return false, false, true
 	}
-	if s.Auth(pw) {
+	if ok, un := s.Auth(pw); ok {
 		s.fails = 0
-		return true, false
+		return true, un, false
 	}
 	s.fails++
 	if s.fails >= 5 {
 		s.fails = 0
 		s.lockUntil = time.Now().Add(time.Minute)
 	}
-	return false, false
+	return false, false, false
+}
+
+// Perms, bağlanan kişinin neleri yapabileceğidir.
+type Perms struct {
+	Control   bool `json:"control"`   // fare ve klavye
+	Clipboard bool `json:"clipboard"` // pano paylaşımı (iki yönlü)
 }
 
 type message struct {
@@ -168,7 +177,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		s.leaveAuth()
 		return
 	}
-	ok, locked := s.tryAuth(m.Pw)
+	ok, unattended, locked := s.tryAuth(m.Pw)
 	if !ok && !locked {
 		log.Printf("hatalı şifre denemesi: %s", remoteAddr(r))
 		time.Sleep(time.Second) // bu bağlantı şifre aşaması kotasını tutmaya devam eder
@@ -194,7 +203,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 	defer s.release()
 
-	if s.Confirm != nil {
+	if s.Confirm != nil && !unattended {
 		wsjson.Write(ctx, c, map[string]string{"t": "wait"})
 		if !s.Confirm(ctx, remote, name) {
 			sendErr(ctx, c, "Bağlantı karşı tarafça reddedildi.")
@@ -210,6 +219,10 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	sess := newSession(c, s.Video, m.H264)
 	sess.name = name
 	sess.concurrent = s.Concurrent
+	sess.perms = s.Perms
+	if unattended {
+		log.Printf("sabit şifreyle bağlanıldı (gözetimsiz erişim): %s", remote)
+	}
 	if m.V >= 10 && m.V <= 95 {
 		sess.quality.Store(int32(m.V))
 	}

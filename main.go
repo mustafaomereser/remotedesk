@@ -14,6 +14,7 @@ import (
 	"remotedesk/internal/app"
 	"remotedesk/internal/desktop"
 	"remotedesk/internal/sysutil"
+	"remotedesk/internal/update"
 )
 
 // appVersion, sürüm paketlerinde (scripts/build-release.sh) kullanılır.
@@ -41,9 +42,15 @@ func run() {
 	autoAccept := flag.Bool("autoaccept", false, "Gelen bağlantıları onay sormadan kabul et")
 	password := flag.String("password", "", "Sabit şifre (boşsa rastgele üretilir)")
 	noTunnel := flag.Bool("notunnel", false, "Tünel açma, sadece 127.0.0.1 üzerinde dinle (test için)")
+	waitPID := flag.Int("waitpid", 0, "Yeniden başlatmada: bu süreç kapanana kadar bekle (iç kullanım)")
 	server := flag.String("server", HubServer, "Buluşma sunucusu adresi (boş: sunucusuz mod)")
 	concurrent := flag.Bool("concurrent", false, "Aynı anda kullanımı (simülasyon modu) açık başlat")
 	flag.Parse()
+
+	if *waitPID > 0 {
+		sysutil.WaitPID(*waitPID)
+	}
+	update.Cleanup()
 
 	dir := dataDir()
 	os.MkdirAll(dir, 0o755)
@@ -80,6 +87,8 @@ func run() {
 		Password:   *password,
 		Concurrent: *concurrent,
 		Server:     strings.TrimRight(*server, "/"),
+		UpdateRepo: UpdateRepo,
+		Version:    appVersion,
 	})
 	if err := a.Run(); err != nil {
 		fail(err.Error())

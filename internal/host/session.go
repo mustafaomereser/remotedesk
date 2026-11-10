@@ -50,7 +50,11 @@ type session struct {
 	wantH264   bool
 	name       string      // bağlanan kişinin adı (imleç etiketi)
 	concurrent func() bool // "aynı anda kullanım" açık mı
-	lastBusy   time.Time   // "karşı taraf kullanıyor" bildiriminin son gönderimi
+	perms      func() Perms
+	statSent   bool
+	lastPerms  Perms
+	lastSecure bool
+	lastBusy   time.Time // "karşı taraf kullanıyor" bildiriminin son gönderimi
 	lastRoute  int
 	remotePos  atomic.Uint64 // uzaktaki kişinin son imleç konumu (x<<32 | y), 0 = yok
 
@@ -89,6 +93,14 @@ func newSession(c *websocket.Conn, vi VideoInfo, wantH264 bool) *session {
 	return s
 }
 
+// allowed, bağlanan kişinin o anki izinleridir (Perms ayarlı değilse her şey serbest).
+func (s *session) allowed() Perms {
+	if s.perms == nil {
+		return Perms{Control: true, Clipboard: true}
+	}
+	return s.perms()
+}
+
 func (s *session) pokeLoop() {
 	select {
 	case s.poke <- struct{}{}:
@@ -122,6 +134,15 @@ func (s *session) readLoop(ctx context.Context) {
 		var m message
 		if err := wsjson.Read(ctx, s.c, &m); err != nil {
 			return
+		}
+		if (m.T == "mm" || m.T == "mb" || m.T == "wh" || m.T == "k") && !s.allowed().Control {
+			// Yalnızca izleme: basılı kalmış düğme/tuş varsa bırak, gerisini yok say.
+			if m.T == "mb" && !m.D && s.in.ButtonDown(m.B) {
+				s.in.Button(m.B, false, m.X, m.Y)
+			} else if m.T == "k" && !m.D && s.in.KeyDown(m.C) {
+				s.in.Key(m.C, false)
+			}
+			continue
 		}
 		switch m.T {
 		case "ack":
@@ -195,7 +216,7 @@ func (s *session) readLoop(ctx context.Context) {
 			s.keyframe.Store(true)
 			s.pokeLoop()
 		case "clip":
-			if len(m.Text) <= maxClipBytes {
+			if s.allowed().Clipboard && len(m.Text) <= maxClipBytes {
 				s.clipMu.Lock()
 				s.clipRemote = m.Text
 				s.clipMu.Unlock()
@@ -268,6 +289,26 @@ func (s *session) label(x, y int, ghost bool) {
 	desktop.RemoteActivity(s.name, dx, dy, ghost)
 }
 
+// sendState, izinler veya güvenli masaüstü (UAC / kilit ekranı) durumu değişince
+// viewer'a bildirir.
+func (s *session) sendState(ctx context.Context) {
+	p := s.allowed()
+	secure := sysutil.SecureDesktopActive()
+	if s.statSent && p == s.lastPerms && secure == s.lastSecure {
+		return
+	}
+	if !s.statSent || secure != s.lastSecure {
+		if secure {
+			log.Printf("güvenli masaüstü (UAC / kilit ekranı) açık")
+		}
+		wsjson.Write(ctx, s.c, map[string]any{"t": "secure", "on": secure, "elevated": sysutil.IsElevated()})
+	}
+	if !s.statSent || p != s.lastPerms {
+		wsjson.Write(ctx, s.c, map[string]any{"t": "perm", "control": p.Control, "clipboard": p.Clipboard})
+	}
+	s.statSent, s.lastPerms, s.lastSecure = true, p, secure
+}
+
 // clipboardLoop, bu bilgisayarın panosu değişince metni viewer'a gönderir.
 func (s *session) clipboardLoop(ctx context.Context) {
 	last := clipboard.Seq()
@@ -279,8 +320,10 @@ func (s *session) clipboardLoop(ctx context.Context) {
 			return
 		case <-t.C:
 		}
+		s.sendState(ctx)
 		seq := clipboard.Seq()
-		if seq == last {
+		if seq == last || !s.allowed().Clipboard {
+			last = seq // izin kapalıyken değişen pano, izin açılınca gönderilmez
 			continue
 		}
 		text, err := clipboard.Read()
