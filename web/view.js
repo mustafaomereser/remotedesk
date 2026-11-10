@@ -46,9 +46,36 @@ function takeConnection() {
   return null;
 }
 
-const conn = takeConnection();
+// webMode: sayfa tünel adresinde tarayıcıyla açıldı (uygulama değil). Bu durumda şifre
+// sorulur ve aynı adrese bağlanılır; yerel uygulama API'si (pano, olaylar) yoktur.
+const webMode = location.pathname === '/';
+if (webMode) document.body.classList.add('web');
+
+const conn = webMode ? null : takeConnection();
 if (conn) connect(conn);
+else if (webMode) showWebLogin();
 else showOverlay('Bağlantı bilgisi bulunamadı. Bu pencereyi ana pencereden açmalısın.', true);
+
+function showWebLogin(err) {
+  overlay.classList.add('hidden');
+  document.body.classList.add('login');
+  $('webLogin').classList.remove('hidden');
+  $('wlErr').textContent = err || '';
+  try { $('wlName').value = $('wlName').value || localStorage.getItem('name') || ''; } catch {}
+  setTimeout(() => $('wlPw').focus(), 0);
+}
+
+$('webLogin').onsubmit = (e) => {
+  e.preventDefault();
+  const name = $('wlName').value.trim();
+  try { localStorage.setItem('name', name); } catch {}
+  $('webLogin').classList.add('hidden');
+  document.body.classList.remove('login');
+  failed = false;
+  everConnected = false;
+  connect({ id: location.origin, pw: $('wlPw').value, name, label: location.host.replace('.trycloudflare.com', '') });
+  $('wlPw').value = '';
+};
 
 // Kalıcı ID ise önce sunucudan hedef cihazın o anki adresi istenir (cihaz bu sırada
 // tünelini açar). Yeni açılan tünelin erişilebilir olması birkaç saniye sürebildiği için
@@ -69,6 +96,7 @@ async function connect({ id, pw, name, label }) {
         body: JSON.stringify({ id }),
       });
       if (!r.ok) throw new Error((await r.text()).trim() || 'Bağlanılamadı.');
+      // Not: ID'nin sahibi cihaz bağlantılara kapalıysa sunucu bunu "çevrimdışı" diye bildirir.
       target = (await r.json()).url;
       retries = 15; // yeni tünelin DNS kaydının yayılması ~10-20 sn sürebilir
     } catch (e) {
@@ -108,6 +136,27 @@ function openSocket(target, pw, name, retries) {
   };
 }
 
+let controlAllowed = true;
+let clipAllowed = true;
+let secureOn = false;
+let hostWarnings = [];
+
+function renderWarnings() {
+  const box = $('vwarn');
+  box.innerHTML = '';
+  const msgs = [...hostWarnings];
+  if (secureOn) {
+    msgs.unshift('Karşı tarafta UAC onay ekranı ya da kilit ekranı açık. Windows bu ekranı korur: ' +
+      'görüntü ve kontrol, ekran kapanınca geri gelir. Onayı karşı bilgisayarın başındaki kişi vermeli.');
+  }
+  for (const t of msgs) {
+    const d = document.createElement('div');
+    d.textContent = '⚠ ' + t;
+    box.appendChild(d);
+  }
+  box.classList.toggle('hidden', !msgs.length);
+}
+
 function onMessage(ev) {
   if (typeof ev.data === 'string') {
     let m;
@@ -125,7 +174,18 @@ function onMessage(ev) {
         break;
       case 'err':
         failed = true;
-        showOverlay(m.msg || 'Hata', true);
+        if (webMode && !everConnected) showWebLogin(m.msg || 'Bağlanılamadı.');
+        else showOverlay(m.msg || 'Hata', true);
+        break;
+      case 'perm':
+        controlAllowed = !!m.control;
+        $('permBadge').classList.toggle('hidden', !!m.control);
+        $('permBadge').title = 'Karşı taraf fare ve klavye iznini kapattı; ekranı yalnızca izleyebilirsin.';
+        clipAllowed = !!m.clipboard;
+        break;
+      case 'secure':
+        secureOn = !!m.on;
+        renderWarnings();
         break;
       case 'pong':
         rtt = performance.now() - m.ts;
@@ -164,19 +224,12 @@ function onMessage(ev) {
         }
         break;
       }
-      case 'warn': {
-        const box = $('vwarn');
-        box.innerHTML = '';
-        for (const t of m.msgs || []) {
-          const d = document.createElement('div');
-          d.textContent = '⚠ ' + t;
-          box.appendChild(d);
-        }
-        box.classList.toggle('hidden', !(m.msgs && m.msgs.length));
+      case 'warn':
+        hostWarnings = m.msgs || [];
+        renderWarnings();
         break;
-      }
       case 'clip':
-        if ($('clipSync').checked && typeof m.text === 'string') {
+        if (!webMode && $('clipSync').checked && typeof m.text === 'string') {
           lastClip = m.text;
           fetch('/api/clipboard', {
             method: 'POST',
@@ -365,7 +418,7 @@ let lastClip = null;
 let clipInitialSent = false;
 
 async function pollClipboard() {
-  if (!connected || !$('clipSync').checked) return;
+  if (webMode || !connected || !clipAllowed || !$('clipSync').checked) return;
   try {
     const r = await fetch('/api/clipboard?seq=' + encodeURIComponent(clipSeq || ''));
     const j = await r.json();
@@ -388,7 +441,7 @@ $('clipSync').onchange = (e) => {
 };
 
 // Uygulama, açık sayfa kalmayınca kapanır; bu bağlantı viewer'ı "açık" sayar.
-try { new EventSource('/api/events'); } catch {}
+if (!webMode) { try { new EventSource('/api/events'); } catch {} }
 
 // ---- istatistik ----
 

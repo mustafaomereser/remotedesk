@@ -69,12 +69,14 @@ function render(s) {
   $('myId').classList.toggle('off', !shown);
   const tb = $('tunBtn');
   // Sunucu çevrimiçiyken tünel kendiliğinden açılır; düğme yalnızca yedek yol olarak görünür.
-  tb.classList.toggle('hidden', local || (hubOn && s.hub === 'online' && !!s.deviceId));
+  tb.classList.toggle('hidden', local || (hubOn && !!s.deviceId && (s.hub === 'online' || s.hub === 'offline')));
   tb.textContent = s.tunnel === 'off' ? 'Tüneli aç' : 'Tüneli kapat';
   tb.classList.toggle('primary', s.tunnel === 'off' && !hubOn);
   $('idCopy').classList.toggle('hidden', !shown);
   let hint = '';
-  if (hubOn && s.deviceId && s.hub === 'online') {
+  if (hubOn && s.hub === 'offline') {
+    hint = 'Bağlantılara kapalı. Bağlanılabilmesi için aşağıdaki anahtarı aç.';
+  } else if (hubOn && s.deviceId && s.hub === 'online') {
     hint = 'Bu ID kalıcıdır. Biri bağlanmak istediğinde bağlantı kendiliğinden açılır.';
   } else if (hubOn && s.deviceId) {
     hint = 'Sunucuya ulaşılamıyor; ID ile bağlantı alınamaz. İstersen tüneli açıp geçici adresi ver' +
@@ -88,7 +90,7 @@ function render(s) {
 
   const dot = $('tunDot');
   if (hubOn) {
-    dot.className = 'dot ' + (s.hub === 'online' ? 'ok' : s.hub === 'error' ? 'err' : 'busy');
+    dot.className = 'dot ' + (s.hub === 'online' ? 'ok' : s.hub === 'error' ? 'err' : s.hub === 'offline' ? 'off' : 'busy');
     $('tunMsg').textContent = s.hubMsg + (s.tunnel === 'on' ? ' · bağlantı açık' : s.tunnel === 'starting' ? ' · bağlantı açılıyor' : '');
   } else {
     dot.className = 'dot ' + (s.tunnel === 'on' ? 'ok' : s.tunnel === 'error' ? 'err' : s.tunnel === 'off' ? 'off' : 'busy');
@@ -96,8 +98,7 @@ function render(s) {
   }
   $('vidDot').className = 'dot ' + (s.video === 'on' ? 'ok' : s.video === 'error' ? 'err' : 'busy');
   $('vidMsg').textContent = s.videoMsg;
-  $('autoAccept').checked = s.autoAccept;
-  $('concurrent').checked = !!s.concurrent;
+  renderSettings(s);
 
   renderPerms(s.perms || {});
 
@@ -204,9 +205,124 @@ $('pwForm').onsubmit = async (e) => {
     toast(err.message);
   }
 };
-$('autoAccept').onchange = (e) => api('host/autoaccept', { value: e.target.checked }).catch((err) => toast(err.message));
 $('kick').onclick = () => api('host/kick');
-$('concurrent').onchange = (e) => api('host/concurrent', { value: e.target.checked }).catch((err) => toast(err.message));
+
+// ---- ayarlar ----
+
+const SWITCHES = ['online', 'onlineAtStart', 'autoAccept', 'allowBrowser', 'allowControl', 'allowClipboard', 'concurrent'];
+for (const k of SWITCHES) {
+  $(k).onchange = (e) => api('settings', { [k]: e.target.checked }).catch((err) => { toast(err.message); if (state) render(state); });
+}
+
+function renderSettings(s) {
+  for (const k of SWITCHES) {
+    if (document.activeElement !== $(k)) $(k).checked = !!s[k];
+  }
+  $('onlineHint').textContent = s.online
+    ? (s.hub ? 'ID ile bağlanılabilir.' : 'Tünel açık; geçici adresle bağlanılabilir.')
+    : 'Kapalıyken kimse bu bilgisayara bağlanamaz.';
+
+  const id = s.deviceId || '';
+  $('setId').textContent = id ? (/^\d{9}$/.test(id) ? fmtId(id) : id) : '—';
+  $('setIdHint').textContent = s.server
+    ? (id ? 'Kalıcıdır; uygulama kapanıp açılınca değişmez.' : 'Sunucuya bağlanınca görünür.')
+    : 'Sunucusuz modda kalıcı ID yok; tünel her açılışta yeni adres alır.';
+  $('renameForm').classList.toggle('hidden', !s.server || !id);
+
+  const link = s.server && id ? s.server + '/c/' + id : '';
+  $('browserLink').textContent = link;
+  $('browserLinkRow').classList.toggle('hidden', !s.allowBrowser || !link);
+  $('browserHint').textContent = s.allowBrowser
+    ? (link ? 'Aşağıdaki adresi açan kişi şifreyle bağlanabilir.' : 'Tünel adresini tarayıcıda açan kişi şifreyle bağlanabilir.')
+    : 'Uygulaması olmayan biri tarayıcıdan şifreyle bağlanabilir.';
+
+  $('fixedState').textContent = s.fixedPassword ? 'Sabit şifre ayarlı' : 'Ayarlı değil';
+  $('fixedRemove').classList.toggle('hidden', !s.fixedPassword);
+  $('fixedSave').textContent = s.fixedPassword ? 'Değiştir' : 'Kaydet';
+
+  $('adminSection').classList.toggle('hidden', !s.elevated && !s.canElevate);
+  $('adminState').textContent = s.elevated ? 'Yönetici olarak çalışıyor' : 'Normal kullanıcı olarak çalışıyor';
+  $('elevate').classList.toggle('hidden', !s.canElevate);
+
+  $('appVersion').textContent = s.version || '';
+  const u = s.update;
+  $('updateBar').classList.toggle('hidden', !u);
+  if (u) {
+    $('updText').textContent = u.status === 'available'
+      ? `Yeni sürüm var: ${u.version}` + (u.msg ? ' · ' + u.msg : '')
+      : `${u.version}: ${u.msg}`;
+    $('updNotes').href = u.url || '#';
+    $('updInstall').classList.toggle('hidden', u.status === 'downloading' || u.status === 'installing' || !!u.msg && u.status === 'available');
+    $('updInstall').textContent = u.status === 'error' ? 'Tekrar dene' : 'Güncelle';
+    $('updState').textContent = u.status === 'available' ? `Yeni sürüm var: ${u.version}` : u.msg;
+  }
+}
+
+function openSettings() {
+  $('settings').classList.remove('hidden');
+  $('closeSettings').focus();
+}
+function closeSettings() { $('settings').classList.add('hidden'); }
+$('openSettings').onclick = openSettings;
+$('closeSettings').onclick = closeSettings;
+$('settings').onclick = (e) => { if (e.target === $('settings')) closeSettings(); };
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !$('settings').classList.contains('hidden')) closeSettings();
+});
+
+$('renameForm').onsubmit = async (e) => {
+  e.preventDefault();
+  const v = $('renameInput').value.trim();
+  if (!v) return;
+  try {
+    await api('settings/rename', { id: v });
+    $('renameInput').value = '';
+    toast('ID değişti');
+  } catch (err) { toast(err.message); }
+};
+$('renameRandom').onclick = async () => {
+  try {
+    await api('settings/rename', { id: '' });
+    toast('Yeni ID alındı');
+  } catch (err) { toast(err.message); }
+};
+$('browserCopy').onclick = () => copy($('browserLink').textContent, 'Adres');
+
+$('fixedForm').onsubmit = async (e) => {
+  e.preventDefault();
+  const v = $('fixedInput').value;
+  if (v.length < 8) { toast('Sabit şifre en az 8 karakter olmalı'); return; }
+  try {
+    await api('settings/fixedpw', { password: v });
+    $('fixedInput').value = '';
+    toast('Sabit şifre kaydedildi');
+  } catch (err) { toast(err.message); }
+};
+$('fixedRemove').onclick = async () => {
+  try {
+    await api('settings/fixedpw', { password: '' });
+    toast('Sabit şifre kaldırıldı');
+  } catch (err) { toast(err.message); }
+};
+
+$('elevate').onclick = async () => {
+  try {
+    await api('elevate');
+    toast('Yönetici olarak yeniden başlatılıyor…');
+  } catch (err) { toast(err.message); }
+};
+
+$('updCheck').onclick = async () => {
+  $('updCheck').disabled = true;
+  try {
+    const r = await fetch('/api/update/check', { method: 'POST' });
+    if (!r.ok) throw new Error((await r.text()).trim());
+    const j = await r.json();
+    if (!j.update) { $('updState').textContent = 'Güncel: en son sürümü kullanıyorsun.'; toast('Güncel'); }
+  } catch (err) { toast(err.message || 'Denetlenemedi'); }
+  $('updCheck').disabled = false;
+};
+$('updInstall').onclick = () => api('update/install').catch((err) => toast(err.message));
 
 // Ad: bir kez girilir, sonraki açılışlarda hatırlanır. Boşsa işletim sistemindeki ad.
 (function initName() {

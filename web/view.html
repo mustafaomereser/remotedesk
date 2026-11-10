@@ -11,6 +11,7 @@
     <div class="vinfo">
       <span id="vTitle" class="title mono"></span>
       <span id="busy" class="badge hidden"></span>
+      <span id="permBadge" class="badge hidden">Yalnızca izleme</span>
       <span id="vStat" class="stat mono"></span>
     </div>
     <div class="vctl">
@@ -43,6 +44,24 @@
   <div id="stage" class="stage">
     <canvas id="screen" class="fit" tabindex="0"></canvas>
     <div id="overlay" class="overlay">Bağlanıyor…</div>
+    <!-- Tarayıcıdan erişim: tünel adresi doğrudan açıldığında şifre sorulur. -->
+    <form id="webLogin" class="weblogin hidden" autocomplete="off">
+      <div class="wl-card">
+        <div class="brand"><span class="logo"></span>RemoteDesk</div>
+        <p class="wl-lead">Bu bilgisayara bağlanmak için şifreyi gir.</p>
+        <div class="field">
+          <label for="wlName">Adın</label>
+          <input id="wlName" type="text" maxlength="32" placeholder="Karşı tarafta görünür" spellcheck="false">
+        </div>
+        <div class="field">
+          <label for="wlPw">Şifre</label>
+          <input id="wlPw" type="password" required autocomplete="current-password">
+        </div>
+        <button class="primary block" type="submit">Bağlan</button>
+        <div id="wlErr" class="error-text"></div>
+        <p class="hint">Bağlantı şifreli; şifre bu sayfadan yalnızca karşı bilgisayara gider.</p>
+      </div>
+    </form>
   </div>
   <div id="toast" class="toast"></div>
   <script src="view.js"></script>

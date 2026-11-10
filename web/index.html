@@ -13,8 +13,16 @@
       <span class="pill"><span id="tunDot" class="dot busy"></span><span id="tunMsg">Başlatılıyor…</span></span>
       <span class="pill"><span id="vidDot" class="dot busy"></span><span id="vidMsg">H.264 hazırlanıyor…</span></span>
     </div>
+    <button id="openSettings" class="small">Ayarlar</button>
     <button id="quit" class="ghost small">Çıkış</button>
   </header>
+
+  <div id="updateBar" class="updbar hidden">
+    <span id="updText"></span>
+    <span class="spacer"></span>
+    <a id="updNotes" href="#" target="_blank" rel="noopener">Neler yeni?</a>
+    <button id="updInstall" class="primary small">Güncelle</button>
+  </div>
 
   <main class="grid">
     <!-- ---- bu bilgisayar ---- -->
@@ -67,26 +75,12 @@
       <div class="rows">
         <label class="row">
           <span class="row-text">
-            <span class="row-title">Onay sormadan kabul et</span>
-            <span class="row-hint">Doğru şifreyle gelen bağlantı hemen başlar.</span>
+            <span class="row-title">Gelen bağlantılara açık</span>
+            <span class="row-hint" id="onlineHint">Kapalıyken kimse bu bilgisayara bağlanamaz.</span>
           </span>
-          <input type="checkbox" class="switch" id="autoAccept">
-        </label>
-        <label class="row">
-          <span class="row-text">
-            <span class="row-title">Aynı anda kullanım <span class="tag">deneysel</span></span>
-            <span class="row-hint">Senin imlecin kıpırdamaz, bağlanan kişi hayalet imleçle çalışır.</span>
-          </span>
-          <input type="checkbox" class="switch" id="concurrent">
+          <input type="checkbox" class="switch" id="online">
         </label>
       </div>
-      <details class="explain">
-        <summary>Aynı anda kullanım ne yapar?</summary>
-        <p><b>Kapalıyken:</b> tek, ortak imleç vardır. Bağlanan kişi imleci oynatırken yanında adı görünür. Sen fareye veya klavyeye dokunduğun anda onun girişi <b>1 saniye bekletilir</b>; imleç için kavga etmezsiniz.</p>
-        <p><b>Açıkken:</b> senin imlecin <b>hiç kıpırdamaz</b>. Bağlanan kişi ekranda adıyla birlikte kendi <b>hayalet imleciyle</b> çalışır; tıkladığı pencereye doğrudan komut gönderilir. İkiniz aynı anda kullanabilirsiniz.</p>
-        <p><b>Hayalet imleçle çalışanlar:</b> klasik uygulamalarda tıklama ve çift tıklama, yazı yazma, Enter / Backspace / ok tuşları, kaydırma (Not Defteri, Gezgin, ayar pencereleri, iletişim kutuları; Mac'te standart düğme ve metin kutuları).</p>
-        <p><b>Çalışmayanlar:</b> Chrome / Edge / Safari ve Electron uygulamaları (VS Code, Discord, Slack, Spotify…), kısayollar (Ctrl+C, Cmd+V…), sürükleme ve sürükle-bırak, sağ tık ve açılır menüler, oyunlar, yönetici olarak çalışan programlar. Mac'te arka plandaki pencereler ilk tıklamayı yok sayabilir. Bunlar gerekiyorsa bu ayarı kapatın.</p>
-      </details>
     </section>
 
     <!-- ---- uzak bilgisayar ---- -->
@@ -115,6 +109,153 @@
       <div id="peers" class="peers"></div>
     </section>
   </main>
+
+  <!-- ---- ayarlar ---- -->
+  <div id="settings" class="modal hidden">
+    <div class="dialog sheet" role="dialog" aria-labelledby="setTitle">
+      <div class="sheet-head">
+        <h3 id="setTitle">Ayarlar</h3>
+        <button id="closeSettings" class="icon" title="Kapat (Esc)">✕</button>
+      </div>
+      <div class="sheet-body">
+
+        <section class="set">
+          <h4>Kimlik</h4>
+          <div class="rows">
+            <div class="row static">
+              <span class="row-text">
+                <span class="row-title">Bu bilgisayarın ID'si</span>
+                <span class="row-hint" id="setIdHint">Sunucuya bağlanınca görünür.</span>
+              </span>
+              <span id="setId" class="mono strong">—</span>
+            </div>
+            <form class="row static col" id="renameForm">
+              <span class="row-text">
+                <span class="row-title">ID'yi değiştir</span>
+                <span class="row-hint">Kendi ID'ni seç (harfle başlar, küçük harf, rakam ve tire; 4-24 karakter) ya da rastgele yeni bir numara al. Eski ID ile artık bağlanılamaz.</span>
+              </span>
+              <div class="inline">
+                <input id="renameInput" type="text" placeholder="ör. mustafa-pc" spellcheck="false" autocomplete="off" maxlength="24">
+                <button class="small" type="submit">Kaydet</button>
+                <button class="small ghost" type="button" id="renameRandom">Rastgele</button>
+              </div>
+            </form>
+          </div>
+        </section>
+
+        <section class="set">
+          <h4>Erişim</h4>
+          <div class="rows">
+            <label class="row">
+              <span class="row-text">
+                <span class="row-title">Uygulama açılınca bağlantılara açık olsun</span>
+                <span class="row-hint">Kapalıysa her açılışta "Gelen bağlantılara açık" anahtarını elle açman gerekir.</span>
+              </span>
+              <input type="checkbox" class="switch" id="onlineAtStart">
+            </label>
+            <label class="row">
+              <span class="row-text">
+                <span class="row-title">Onay sormadan kabul et</span>
+                <span class="row-hint">Tek kullanımlık şifreyle gelen bağlantı da onay beklemeden başlar.</span>
+              </span>
+              <input type="checkbox" class="switch" id="autoAccept">
+            </label>
+            <label class="row">
+              <span class="row-text">
+                <span class="row-title">Tarayıcıdan erişime izin ver</span>
+                <span class="row-hint" id="browserHint">Uygulaması olmayan biri tarayıcıdan şifreyle bağlanabilir.</span>
+              </span>
+              <input type="checkbox" class="switch" id="allowBrowser">
+            </label>
+            <div class="row static hidden" id="browserLinkRow">
+              <span class="row-text">
+                <span class="row-title">Tarayıcı adresi</span>
+                <span class="row-hint mono" id="browserLink"></span>
+              </span>
+              <button class="small" id="browserCopy" type="button">Kopyala</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="set">
+          <h4>Sabit şifre <span class="muted small-n">gözetimsiz erişim</span></h4>
+          <div class="rows">
+            <form class="row static col" id="fixedForm">
+              <span class="row-text">
+                <span class="row-title" id="fixedState">Ayarlı değil</span>
+                <span class="row-hint">Bu şifreyle bağlanan kişi, sen bilgisayarın başında olmasan da onay beklemeden bağlanır. Tek kullanımlık şifre de çalışmaya devam eder. En az 8 karakter; şifre yalnızca özet olarak saklanır.</span>
+              </span>
+              <div class="inline">
+                <input id="fixedInput" type="password" placeholder="Yeni sabit şifre" autocomplete="new-password" minlength="8">
+                <button class="small" type="submit" id="fixedSave">Kaydet</button>
+                <button class="small danger hidden" type="button" id="fixedRemove">Kaldır</button>
+              </div>
+            </form>
+          </div>
+        </section>
+
+        <section class="set">
+          <h4>Bağlanan kişinin izinleri</h4>
+          <div class="rows">
+            <label class="row">
+              <span class="row-text">
+                <span class="row-title">Fare ve klavye</span>
+                <span class="row-hint">Kapalıyken bağlanan kişi yalnızca izler.</span>
+              </span>
+              <input type="checkbox" class="switch" id="allowControl">
+            </label>
+            <label class="row">
+              <span class="row-text">
+                <span class="row-title">Pano paylaşımı</span>
+                <span class="row-hint">Kopyalanan metin iki bilgisayar arasında aktarılır.</span>
+              </span>
+              <input type="checkbox" class="switch" id="allowClipboard">
+            </label>
+            <label class="row">
+              <span class="row-text">
+                <span class="row-title">Aynı anda kullanım <span class="tag">deneysel</span></span>
+                <span class="row-hint">Senin imlecin kıpırdamaz, bağlanan kişi hayalet imleçle çalışır.</span>
+              </span>
+              <input type="checkbox" class="switch" id="concurrent">
+            </label>
+          </div>
+          <details class="explain">
+            <summary>Aynı anda kullanım ne yapar?</summary>
+            <p><b>Kapalıyken:</b> tek, ortak imleç vardır. Sen fareye veya klavyeye dokunduğun anda bağlanan kişinin girişi <b>1 saniye bekletilir</b> ve imlecinin nerede kaldığı adıyla gösterilir.</p>
+            <p><b>Açıkken:</b> senin imlecin <b>hiç kıpırdamaz</b>. Bağlanan kişi ekranda adıyla birlikte kendi <b>hayalet imleciyle</b> çalışır; tıkladığı pencereye doğrudan komut gönderilir.</p>
+            <p><b>Hayalet imleçle çalışanlar:</b> klasik uygulamalarda tıklama, yazı yazma, Enter / Backspace / ok tuşları, kaydırma.</p>
+            <p><b>Çalışmayanlar:</b> tarayıcılar ve Electron uygulamaları, kısayollar, sürükleme, sağ tık menüleri, oyunlar, yönetici olarak çalışan programlar.</p>
+          </details>
+        </section>
+
+        <section class="set" id="adminSection">
+          <h4>Yönetici (UAC)</h4>
+          <div class="rows">
+            <div class="row static">
+              <span class="row-text">
+                <span class="row-title" id="adminState">Normal kullanıcı olarak çalışıyor</span>
+                <span class="row-hint">Yönetici olarak çalışırsa bağlanan kişi yönetici olarak açılmış pencereleri de kontrol edebilir. UAC onay ekranı ve kilit ekranı Windows tarafından korunur: bu ekranlar açıkken bağlanan kişi ekranı göremez, onayı bu bilgisayarın başındaki kişi vermelidir.</span>
+              </span>
+              <button class="small" id="elevate" type="button">Yönetici olarak yeniden başlat</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="set">
+          <h4>Hakkında</h4>
+          <div class="rows">
+            <div class="row static">
+              <span class="row-text">
+                <span class="row-title">RemoteDesk <span id="appVersion"></span></span>
+                <span class="row-hint" id="updState">Güncellemeler GitHub'dan denetlenir.</span>
+              </span>
+              <button class="small" id="updCheck" type="button">Güncellemeleri denetle</button>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
 
   <div id="modal" class="modal hidden">
     <div class="dialog">
