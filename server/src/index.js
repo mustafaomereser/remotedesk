@@ -97,6 +97,7 @@ export class Hub {
         case "/":
           return new Response("RemoteDesk hub\n");
       }
+      if (url.pathname.startsWith("/c/")) return this.browserPage(url);
       return json({ error: "bulunamadı" }, 404);
     } catch (e) {
       return json({ error: "sunucu hatası" }, 500);
@@ -122,6 +123,41 @@ export class Hub {
       }
     }
     return json({ error: "ID üretilemedi" }, 503);
+  }
+
+  // Tarayıcıdan bağlanma: https://<hub>/c/<id> sayfası karşı cihazdan tünel açmasını ister,
+  // tünel adresi erişilebilir olunca oraya yönlendirir. Şifre tünel sayfasında sorulur.
+  browserPage(url) {
+    const id = decodeURIComponent(url.pathname.slice(3)).replace(/\s+/g, "").toLowerCase();
+    if (!validId(id)) return new Response("Geçersiz ID", { status: 404 });
+    const html = `<!doctype html><html lang="tr"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>RemoteDesk · ${id}</title>
+<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#111113;color:#b0b4ba;font:15px system-ui,-apple-system,"Segoe UI",sans-serif;text-align:center;padding:24px}
+.t{font-size:18px;font-weight:600;color:#edeef0;margin-bottom:8px}.e{color:#ff6369}
+.s{width:22px;height:22px;border:2px solid #2e3135;border-top-color:#edeef0;border-radius:50%;margin:0 auto 16px;animation:r 1s linear infinite}
+@keyframes r{to{transform:rotate(360deg)}}</style>
+<body><div><div class="s" id="sp"></div><div class="t">RemoteDesk</div><div id="m">${id} cihazına ulaşılıyor…</div></div>
+<script>
+const id=${JSON.stringify(id)};const m=document.getElementById('m');
+function fail(t){document.getElementById('sp').remove();m.className='e';m.textContent=t;}
+(async()=>{
+  let r;
+  try{r=await fetch('/connect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});}
+  catch{return fail('Sunucuya ulaşılamadı.');}
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok||!j.url)return fail(j.error||'Bağlanılamadı.');
+  m.textContent='Bağlantı hazırlanıyor…';
+  // Yeni tünelin adresi birkaç saniye içinde erişilebilir olur.
+  for(let i=0;i<30;i++){
+    try{await fetch(j.url+'/style.css',{mode:'no-cors',cache:'no-store'});location.replace(j.url+'/');return;}
+    catch{await new Promise(s=>setTimeout(s,1000));}
+  }
+  fail('Karşı cihazın bağlantısı zamanında hazır olmadı. Sayfayı yenileyip tekrar dene.');
+})();
+</script>`;
+    return new Response(html, {
+      headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "X-Frame-Options": "DENY", "Referrer-Policy": "no-referrer" },
+    });
   }
 
   async rename(req, ip) {

@@ -91,11 +91,13 @@ type State struct {
 	HubMsg   string `json:"hubMsg"`
 
 	// Online: gelen bağlantılara açık mı (sunucuya bağlı / tünel açık).
-	Online         bool `json:"online"`
-	OnlineAtStart  bool `json:"onlineAtStart"`
-	AllowControl   bool `json:"allowControl"`
-	AllowClipboard bool `json:"allowClipboard"`
-	FixedPassword  bool `json:"fixedPassword"` // sabit şifre ayarlı mı (şifrenin kendisi gönderilmez)
+	Online         bool   `json:"online"`
+	OnlineAtStart  bool   `json:"onlineAtStart"`
+	AllowControl   bool   `json:"allowControl"`
+	AllowClipboard bool   `json:"allowClipboard"`
+	FixedPassword  bool   `json:"fixedPassword"` // sabit şifre ayarlı mı (şifrenin kendisi gönderilmez)
+	AllowBrowser   bool   `json:"allowBrowser"`
+	Server         string `json:"server"` // buluşma sunucusu (tarayıcı adresi için)
 
 	Elevated   bool        `json:"elevated"`   // Windows: yönetici olarak çalışıyor
 	CanElevate bool        `json:"canElevate"` // "Yönetici olarak yeniden başlat" sunulabilir
@@ -159,7 +161,7 @@ func New(o Options) *App {
 		st: State{
 			Tunnel: "starting", TunnelMsg: "Başlatılıyor…",
 			Video: "starting", VideoMsg: "H.264 hazırlanıyor…",
-			Password: pw, Version: o.Version,
+			Password: pw, Version: o.Version, Server: o.Server,
 			Elevated: sysutil.IsElevated(), CanElevate: sysutil.CanElevate(),
 		},
 	}
@@ -175,6 +177,7 @@ func New(o Options) *App {
 	a.host = &host.Server{
 		Auth: a.checkPassword, Confirm: a.confirm, OnSession: a.onSession,
 		Video: a.videoInfo, Concurrent: a.concurrent, Perms: a.permissions,
+		Browser: a.browserAllowed, WebFS: web.FS,
 	}
 	a.peers.load(o.DataDir)
 	if sysutil.PermissionsNeeded() {

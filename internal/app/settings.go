@@ -26,6 +26,7 @@ type Settings struct {
 	Concurrent     bool `json:"concurrent"`     // aynı anda kullanım
 	AllowControl   bool `json:"allowControl"`   // bağlanan kişi fare/klavye kullanabilir
 	AllowClipboard bool `json:"allowClipboard"` // pano paylaşımı
+	AllowBrowser   bool `json:"allowBrowser"`   // tünel adresi tarayıcıda açılabilir (şifreyle)
 
 	// Sabit şifre (gözetimsiz erişim): yalnızca PBKDF2 özeti saklanır.
 	FixedHash string `json:"fixedHash,omitempty"`
@@ -65,6 +66,7 @@ func (a *App) syncStateLocked() {
 	a.st.AllowControl = a.set.AllowControl
 	a.st.AllowClipboard = a.set.AllowClipboard
 	a.st.FixedPassword = a.set.FixedHash != ""
+	a.st.AllowBrowser = a.set.AllowBrowser
 }
 
 func fixedHash(pw, saltHex string) string {
@@ -86,6 +88,12 @@ func (a *App) checkPassword(pw string) (ok, unattended bool) {
 		return true, true
 	}
 	return false, false
+}
+
+func (a *App) browserAllowed() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.set.AllowBrowser
 }
 
 func (a *App) permissions() host.Perms {
@@ -137,6 +145,7 @@ func (a *App) handleSettings(w http.ResponseWriter, r *http.Request) {
 		Concurrent     *bool `json:"concurrent"`
 		AllowControl   *bool `json:"allowControl"`
 		AllowClipboard *bool `json:"allowClipboard"`
+		AllowBrowser   *bool `json:"allowBrowser"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		http.Error(w, err.Error(), 400)
@@ -153,6 +162,7 @@ func (a *App) handleSettings(w http.ResponseWriter, r *http.Request) {
 	set(&a.set.Concurrent, body.Concurrent)
 	set(&a.set.AllowControl, body.AllowControl)
 	set(&a.set.AllowClipboard, body.AllowClipboard)
+	set(&a.set.AllowBrowser, body.AllowBrowser)
 	a.saveSettingsLocked()
 	a.syncStateLocked()
 	a.broadcastLocked()

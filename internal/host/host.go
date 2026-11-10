@@ -4,9 +4,11 @@ package host
 
 import (
 	"context"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +24,10 @@ type Server struct {
 	Auth func(pw string) (ok, unattended bool)
 	// Perms, bağlanan kişinin o anki izinlerini döner (oturum boyunca canlı okunur).
 	Perms func() Perms
+	// Browser, tünel adresinin tarayıcıda açılıp açılamayacağını söyler (nil: kapalı).
+	// Açıksa "/" adresinde şifre soran izleme sayfası (WebFS'teki view.html) sunulur.
+	Browser func() bool
+	WebFS   fs.FS
 	// Confirm, kullanıcıdan bağlantı onayı ister (nil ise otomatik kabul).
 	Confirm func(ctx context.Context, remote, name string) bool
 	// OnSession, oturum başladığında/bittiğinde çağrılır.
@@ -121,11 +127,57 @@ func cleanName(s string) string {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", s.handleWS)
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.Write([]byte("RemoteDesk host\n"))
-	})
+	// Tarayıcıdan erişim: yalnızca izleme sayfası ve onun dosyaları sunulur
+	// (yerel arayüz ve API asla buradan sunulmaz).
+	page := func(name, ctype string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if !s.browserAllowed() || s.WebFS == nil {
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				w.WriteHeader(http.StatusForbidden)
+				w.Write([]byte(browserOff))
+				return
+			}
+			b, err := fs.ReadFile(s.WebFS, name)
+			if err != nil {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Content-Type", ctype)
+			w.Header().Set("Cache-Control", "no-store")
+			w.Header().Set("X-Frame-Options", "DENY")
+			w.Header().Set("Referrer-Policy", "no-referrer")
+			w.Write(b)
+		}
+	}
+	mux.HandleFunc("GET /{$}", page("view.html", "text/html; charset=utf-8"))
+	mux.HandleFunc("GET /view.js", page("view.js", "text/javascript; charset=utf-8"))
+	mux.HandleFunc("GET /style.css", page("style.css", "text/css; charset=utf-8"))
+	mux.HandleFunc("/", http.NotFound)
 	return mux
+}
+
+const browserOff = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RemoteDesk</title><body style="margin:0;min-height:100vh;display:grid;place-items:center;background:#111113;color:#b0b4ba;font:15px system-ui,sans-serif;text-align:center;padding:24px">
+<div><div style="font-size:18px;font-weight:600;color:#edeef0;margin-bottom:8px">Tarayıcıdan erişim kapalı</div>
+Bu bilgisayara yalnızca RemoteDesk uygulamasıyla bağlanılabilir.</div></body>`
+
+func (s *Server) browserAllowed() bool { return s.Browser != nil && s.Browser() }
+
+// fromBrowser: bağlantı tünel adresinde açılmış bir web sayfasından mı geliyor?
+// Uygulamanın izleme penceresi yerel adresten (127.0.0.1) bağlanır. Not: Origin başlığını
+// tarayıcı dışı bir istemci taklit edebilir; asıl koruma şifredir, bu ayar tarayıcıyla
+// erişimi kapatır.
+func fromBrowser(r *http.Request) bool {
+	o := r.Header.Get("Origin")
+	if o == "" {
+		return false
+	}
+	u, err := url.Parse(o)
+	if err != nil {
+		return true
+	}
+	h := u.Hostname()
+	return h != "127.0.0.1" && h != "localhost" && h != "::1"
 }
 
 // Kick aktif oturumu sonlandırır.
@@ -149,6 +201,10 @@ func remoteAddr(r *http.Request) string {
 }
 
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
+	if fromBrowser(r) && !s.browserAllowed() {
+		http.Error(w, "Tarayıcıdan erişim kapalı.", http.StatusForbidden)
+		return
+	}
 	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		// Viewer farklı bir origin'den (yerel UI) bağlanır; yetkilendirme şifre ile yapılır.
 		InsecureSkipVerify: true,
