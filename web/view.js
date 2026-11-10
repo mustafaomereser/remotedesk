@@ -50,7 +50,7 @@ const conn = takeConnection();
 if (conn) connect(conn);
 else showOverlay('Bağlantı bilgisi bulunamadı. Bu pencereyi ana pencereden açmalısın.', true);
 
-function connect({ id, pw }) {
+function connect({ id, pw, name }) {
   document.title = id + ' · RemoteDesk';
   $('vTitle').textContent = id;
   showOverlay('Bağlanıyor…');
@@ -61,7 +61,7 @@ function connect({ id, pw }) {
     showOverlay('Kimlik doğrulanıyor…');
     h264Supported = await checkH264();
     $('codec').querySelector('option[value=h264]').disabled = !h264Supported;
-    ws.send(JSON.stringify({ t: 'auth', pw, h264: h264Supported, v: +$('quality').value }));
+    ws.send(JSON.stringify({ t: 'auth', pw, name, h264: h264Supported, v: +$('quality').value }));
   };
   ws.onmessage = onMessage;
   ws.onclose = () => {
@@ -113,6 +113,23 @@ function onMessage(ev) {
       case 'hstat':
         hostStat = m;
         break;
+      case 'busy': {
+        // Karşı taraf bilgisayarı kullanıyor: girişin ya bekletiliyor ya da simülasyon modunda.
+        const b = $('busy');
+        if (m.mode === 'wait') {
+          b.textContent = 'Karşı taraf kullanıyor · girişin bekletiliyor';
+          b.className = 'badge';
+          b.title = 'Karşı taraf fareyi/klavyeyi bıraktıktan 1 sn sonra kontrol sana döner.';
+        } else if (m.mode === 'sim') {
+          b.textContent = 'Simülasyon modu · sınırlı';
+          b.className = 'badge sim';
+          b.title = 'Karşı taraf kullanırken imleci oynatmadan, tıkladığın pencereye doğrudan komut gönderiliyor. ' +
+            'Klasik uygulamalarda tıklama ve yazı çalışır; tarayıcılar, Electron uygulamaları, kısayollar ve sürükle-bırak çalışmaz.';
+        } else {
+          b.className = 'badge hidden';
+        }
+        break;
+      }
       case 'warn': {
         const box = $('vwarn');
         box.innerHTML = '';
@@ -409,7 +426,7 @@ canvas.addEventListener('wheel', (e) => {
   if (!connected) return;
   const k = e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? 120 : 1.2;
   const dx = Math.round(e.deltaX * k), dy = Math.round(e.deltaY * k);
-  if (dx || dy) send({ t: 'wh', dx, dy });
+  if (dx || dy) send({ t: 'wh', dx, dy, ...pos(e) });
 }, { passive: false });
 
 // ---- klavye ----
@@ -422,7 +439,7 @@ window.addEventListener('keydown', (e) => {
   if (!connected || fromToolbar(e) || !e.code || e.code === 'Unidentified') return;
   e.preventDefault();
   pressedKeys.add(e.code);
-  send({ t: 'k', c: e.code, d: true });
+  send({ t: 'k', c: e.code, d: true, ch: printable(e) });
 });
 
 window.addEventListener('keyup', (e) => {
@@ -431,6 +448,15 @@ window.addEventListener('keyup', (e) => {
   pressedKeys.delete(e.code);
   send({ t: 'k', c: e.code, d: false });
 });
+
+// Tuşun ürettiği karakter (simülasyon modunda hedef pencereye doğrudan yazılır).
+// Kısayollar (Ctrl/Cmd ile) karakter sayılmaz; AltGr ile yazılan karakterler sayılır.
+function printable(e) {
+  if ([...e.key].length !== 1) return '';
+  const altGr = e.getModifierState && e.getModifierState('AltGraph');
+  if ((e.ctrlKey || e.metaKey) && !altGr) return '';
+  return e.key;
+}
 
 // Pencere odağı kaybolunca (ör. Alt+Tab) basılı tuşları bırak.
 function clearInputs(notify) {

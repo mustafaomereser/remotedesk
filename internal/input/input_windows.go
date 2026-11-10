@@ -6,6 +6,8 @@ import (
 	"sync"
 	"unsafe"
 
+	"remotedesk/internal/desktop"
+
 	"golang.org/x/sys/windows"
 )
 
@@ -80,6 +82,7 @@ func send(inputs []rawInput) {
 }
 
 func sendKey(ki keybdInput) {
+	desktop.MarkInjected()
 	in := rawKeyInput{Type: inputKeyboard, Ki: ki}
 	procSendInput.Call(1, uintptr(unsafe.Pointer(&in)), unsafe.Sizeof(in))
 }
@@ -91,6 +94,7 @@ type Injector struct {
 	m       Mapping
 	keys    map[string]bool
 	buttons map[int]bool
+	bg      bgState // simülasyon modu durumu
 }
 
 func New() *Injector {
@@ -111,6 +115,7 @@ func (in *Injector) moveInput(x, y int) rawInput {
 	if vw < 2 || vh < 2 {
 		vw, vh = 2, 2
 	}
+	desktop.MarkPointer(int(dx), int(dy))
 	nx := (dx - float64(vx)) * 65535 / float64(vw-1)
 	ny := (dy - float64(vy)) * 65535 / float64(vh-1)
 	return rawInput{Type: inputMouse, Mi: mouseInput{
@@ -174,6 +179,7 @@ func pick(c bool, a, b uint32) uint32 {
 func (in *Injector) Wheel(dx, dy int) {
 	in.mu.Lock()
 	defer in.mu.Unlock()
+	desktop.MarkInjected()
 	var evs []rawInput
 	if dy != 0 {
 		evs = append(evs, rawInput{Type: inputMouse, Mi: mouseInput{Flags: mouseWheel, MouseData: uint32(int32(-dy))}})

@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/ebitengine/purego"
+
+	"remotedesk/internal/desktop"
 )
 
 type cgPoint struct{ X, Y float64 }
@@ -103,6 +105,7 @@ type Injector struct {
 	m       Mapping
 	keys    map[string]bool
 	buttons map[int]bool
+	bg      bgState // simülasyon modu durumu
 	mods    map[string]uint64
 
 	lastBtn   int
@@ -133,6 +136,11 @@ func (in *Injector) flags() uint64 {
 func (in *Injector) pt(x, y int) cgPoint {
 	px, py := in.m.apply(x, y)
 	return cgPoint{px, py}
+}
+
+func (in *Injector) mouse0(typ uint32, p cgPoint, btn uint32, clicks int64) {
+	desktop.MarkPointer(int(p.X), int(p.Y))
+	in.mouse(typ, p, btn, clicks)
 }
 
 func (in *Injector) post(ev uintptr) {
@@ -181,11 +189,11 @@ func (in *Injector) Move(x, y int) {
 	for _, b := range []int{0, 2, 1} {
 		if in.buttons[b] {
 			btn, _, _, drag, _ := cgButton(b)
-			in.mouse(drag, p, btn, in.clicks)
+			in.mouse0(drag, p, btn, in.clicks)
 			return
 		}
 	}
-	in.mouse(evMouseMoved, p, 0, 0)
+	in.mouse0(evMouseMoved, p, 0, 0)
 }
 
 func (in *Injector) Button(b int, down bool, x, y int) {
@@ -210,10 +218,10 @@ func (in *Injector) Button(b int, down bool, x, y int) {
 		}
 		in.lastBtn, in.lastClick, in.lastPt = b, now, p
 		in.buttons[b] = true
-		in.mouse(downT, p, btn, in.clicks)
+		in.mouse0(downT, p, btn, in.clicks)
 	} else {
 		in.buttons[b] = false
-		in.mouse(upT, p, btn, in.clicks)
+		in.mouse0(upT, p, btn, in.clicks)
 	}
 }
 
@@ -234,6 +242,7 @@ func (in *Injector) Wheel(dx, dy int) {
 		}
 		return int32(p)
 	}
+	desktop.MarkInjected()
 	ev := cgEventCreateScrollWheelEvent2(0, scrollPixel, 2, conv(dy), conv(dx), 0)
 	if ev != 0 {
 		cgEventSetFlags(ev, in.flags())
@@ -262,6 +271,7 @@ func (in *Injector) key(code string, down bool) {
 			delete(in.mods, code)
 		}
 	}
+	desktop.MarkInjected()
 	ev := cgEventCreateKeyboardEvent(0, kc, down)
 	if ev == 0 {
 		return

@@ -223,3 +223,18 @@ body.fs .vbar {
   transition: transform .18s ease; opacity: .95;
 }
 body.fs .vbar:hover { transform: translate(-50%, 0); }
+
+.tag {
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: .5px;
+  padding: 1px 6px; border-radius: 6px; background: rgba(240, 180, 41, .15); color: #f5cf6b;
+}
+.explain { margin: 4px 0 0 23px; font-size: 12.5px; color: var(--muted); }
+.explain summary { cursor: pointer; color: var(--text); opacity: .8; }
+.explain p { margin: 6px 0; line-height: 1.45; }
+.explain b { color: var(--text); }
+
+.badge {
+  font-size: 12px; padding: 3px 9px; border-radius: 999px; white-space: nowrap;
+  background: rgba(240, 180, 41, .15); color: #f5cf6b; border: 1px solid rgba(240, 180, 41, .4);
+}
+.badge.sim { background: rgba(80, 160, 255, .15); color: #8cc4ff; border-color: rgba(80, 160, 255, .45); }

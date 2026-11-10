@@ -58,18 +58,21 @@ function render(s) {
   $('vidDot').className = 'dot ' + (s.video === 'on' ? 'ok' : s.video === 'error' ? 'err' : 'busy');
   $('vidMsg').textContent = s.videoMsg;
   $('autoAccept').checked = s.autoAccept;
+  $('concurrent').checked = !!s.concurrent;
 
   renderPerms(s.perms || {});
 
   if (s.session) {
     $('sessionBox').classList.remove('hidden');
-    $('sessRemote').textContent = s.session.remote;
+    $('sessName').textContent = s.session.name || '';
+    $('sessRemote').textContent = '(' + s.session.remote + ')';
   } else {
     $('sessionBox').classList.add('hidden');
   }
 
   if (s.pending) {
-    $('reqRemote').textContent = s.pending.remote;
+    $('reqName').textContent = s.pending.name || '';
+    $('reqRemote').textContent = '(' + s.pending.remote + ')';
     $('modal').classList.remove('hidden');
   } else {
     $('modal').classList.add('hidden');
@@ -163,6 +166,19 @@ $('pwForm').onsubmit = async (e) => {
 };
 $('autoAccept').onchange = (e) => api('host/autoaccept', { value: e.target.checked }).catch((err) => toast(err.message));
 $('kick').onclick = () => api('host/kick');
+$('concurrent').onchange = (e) => api('host/concurrent', { value: e.target.checked }).catch((err) => toast(err.message));
+
+// Ad: bir kez girilir, sonraki açılışlarda hatırlanır. Boşsa işletim sistemindeki ad.
+(function initName() {
+  let saved = '';
+  try { saved = localStorage.getItem('name') || ''; } catch {}
+  if (saved) {
+    $('myName').value = saved;
+  } else {
+    fetch('/api/me').then((r) => r.json()).then((j) => { if (!$('myName').value) $('myName').value = j.name || ''; }).catch(() => {});
+  }
+  $('myName').onchange = () => { try { localStorage.setItem('name', $('myName').value.trim()); } catch {} };
+})();
 $('accept').onclick = () => state && state.pending && api('host/confirm', { id: state.pending.id, accept: true }).catch((e) => toast(e.message));
 $('reject').onclick = () => state && state.pending && api('host/confirm', { id: state.pending.id, accept: false }).catch((e) => toast(e.message));
 $('quit').onclick = async () => {
@@ -220,7 +236,7 @@ $('connectForm').onsubmit = (e) => {
     $('connectErr').textContent = 'Bu, bu bilgisayarın kendi ID\'si.';
     return;
   }
-  pendingConnections.push({ id, pw });
+  pendingConnections.push({ id, pw, name: $('myName').value.trim() });
   const w = window.open('view.html', '_blank', 'popup=yes,width=1280,height=800');
   if (!w) {
     pendingConnections.pop();

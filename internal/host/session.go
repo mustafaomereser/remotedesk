@@ -15,6 +15,7 @@ import (
 
 	"remotedesk/internal/capture"
 	"remotedesk/internal/clipboard"
+	"remotedesk/internal/desktop"
 	"remotedesk/internal/input"
 	"remotedesk/internal/sysutil"
 	"remotedesk/internal/video"
@@ -43,10 +44,14 @@ const (
 )
 
 type session struct {
-	c        *websocket.Conn
-	in       *input.Injector
-	video    VideoInfo
-	wantH264 bool
+	c          *websocket.Conn
+	in         *input.Injector
+	video      VideoInfo
+	wantH264   bool
+	name       string      // bağlanan kişinin adı (imleç etiketi)
+	concurrent func() bool // "aynı anda kullanım" açık mı
+	lastBusy   time.Time   // "karşı taraf kullanıyor" bildiriminin son gönderimi
+	lastRoute  int
 
 	quality     atomic.Int32
 	wantDisplay atomic.Int32 // -1: değişiklik yok
@@ -97,6 +102,7 @@ func (s *session) run(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	defer s.in.ReleaseAll()
+	defer desktop.HideLabel()
 	go func() {
 		s.readLoop(ctx)
 		cancel()
@@ -123,13 +129,46 @@ func (s *session) readLoop(ctx context.Context) {
 			default:
 			}
 		case "mm":
-			s.in.Move(m.X, m.Y)
+			switch s.route(ctx, false) {
+			case routeNormal:
+				s.in.Move(m.X, m.Y)
+				s.label(m.X, m.Y)
+			case routeSim:
+				s.in.BgMove(m.X, m.Y)
+				s.label(m.X, m.Y)
+			}
 		case "mb":
-			s.in.Button(m.B, m.D, m.X, m.Y)
+			// Normal yoldan basılan düğme normal yoldan bırakılmalı (takılı kalmasın).
+			if !m.D && s.in.ButtonDown(m.B) {
+				s.in.Button(m.B, false, m.X, m.Y)
+				break
+			}
+			switch s.route(ctx, !m.D) {
+			case routeNormal:
+				s.in.Button(m.B, m.D, m.X, m.Y)
+				s.label(m.X, m.Y)
+			case routeSim:
+				s.in.BgButton(m.B, m.D, m.X, m.Y)
+				s.label(m.X, m.Y)
+			}
 		case "wh":
-			s.in.Wheel(m.DX, m.DY)
+			switch s.route(ctx, false) {
+			case routeNormal:
+				s.in.Wheel(m.DX, m.DY)
+			case routeSim:
+				s.in.BgWheel(m.DX, m.DY, m.X, m.Y)
+			}
 		case "k":
-			s.in.Key(m.C, m.D)
+			if !m.D && s.in.KeyDown(m.C) {
+				s.in.Key(m.C, false)
+				break
+			}
+			switch s.route(ctx, !m.D) {
+			case routeNormal:
+				s.in.Key(m.C, m.D)
+			case routeSim:
+				s.in.BgKey(m.C, m.Ch, m.D)
+			}
 		case "q":
 			if m.V >= 10 && m.V <= 95 {
 				s.quality.Store(int32(m.V))
@@ -161,6 +200,43 @@ func (s *session) readLoop(ctx context.Context) {
 			wsjson.Write(ctx, s.c, map[string]any{"t": "pong", "ts": m.TS})
 		}
 	}
+}
+
+// Giriş yönlendirme: yerel kullanıcı son 1 sn içinde fare/klavye kullandıysa uzaktaki
+// kişinin girişi ya simülasyon moduna gider ("aynı anda kullanım" açıksa) ya da bekletilir.
+const (
+	routeNormal = iota
+	routeSim
+	routeDrop
+)
+
+const localPriority = time.Second
+
+func (s *session) route(ctx context.Context, release bool) int {
+	r := routeNormal
+	if desktop.LocalActive(localPriority) {
+		switch {
+		case s.concurrent != nil && s.concurrent():
+			r = routeSim
+		case release:
+			r = routeNormal // bırakma olayları her zaman uygulanır
+		default:
+			r = routeDrop
+		}
+	}
+	// Mod değiştiğinde (veya beklerken saniyede bir) viewer'a bildir.
+	if r != s.lastRoute || (r == routeDrop && time.Since(s.lastBusy) > time.Second) {
+		s.lastRoute, s.lastBusy = r, time.Now()
+		mode := map[int]string{routeNormal: "normal", routeSim: "sim", routeDrop: "wait"}[r]
+		wsjson.Write(ctx, s.c, map[string]any{"t": "busy", "mode": mode})
+	}
+	return r
+}
+
+// label, ad etiketini uzaktaki kişinin işlem yaptığı noktaya koyar.
+func (s *session) label(x, y int) {
+	dx, dy := s.in.Desktop(x, y)
+	desktop.RemoteActivity(s.name, dx, dy)
 }
 
 // clipboardLoop, bu bilgisayarın panosu değişince metni viewer'a gönderir.

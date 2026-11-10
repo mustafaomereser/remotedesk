@@ -42,9 +42,18 @@
       <div id="warnings"></div>
 
       <label class="check"><input type="checkbox" id="autoAccept"> Bağlantıları onay sormadan kabul et</label>
+      <label class="check"><input type="checkbox" id="concurrent"> Aynı anda kullanım <span class="tag">deneysel</span></label>
+      <details class="explain">
+        <summary>Bu ne yapar?</summary>
+        <p>Kapalıyken: sen fareyi veya klavyeyi kullandığın anda bağlanan kişinin girişi <b>1 saniye bekletilir</b>, imleç için kavga etmezsiniz.</p>
+        <p>Açıkken: sen kullanırken bağlanan kişi <b>simülasyon moduna</b> geçer; senin imlecine ve odağına dokunmadan, tıkladığı pencereye doğrudan komut gönderir. Ekranda onun adı işlem yaptığı yerde görünür.</p>
+        <p><b>Çalışır:</b> klasik uygulamalarda tıklama ve çift tıklama, yazı yazma, Enter / Backspace / ok tuşları, kaydırma (Not Defteri, Gezgin, ayar pencereleri, iletişim kutuları; Mac'te standart düğme ve metin kutuları).</p>
+        <p><b>Çalışmaz:</b> Chrome / Edge / Safari ve Electron uygulamaları (VS Code, Discord, Slack, Spotify…), kısayollar (Ctrl+C, Cmd+V…), sürükle-bırak, sağ tık ve açılır menüler, oyunlar, yönetici olarak çalışan programlar. Mac'te arka plandaki pencereler ilk tıklamayı yok sayabilir.</p>
+        <p>Sen 1 saniye boyunca hiçbir şeye dokunmazsan bağlanan kişi otomatik olarak normal kontrole döner.</p>
+      </details>
 
       <div id="sessionBox" class="session hidden">
-        <span>Bağlı: <b id="sessRemote" class="mono"></b> <span id="sessTime" class="muted"></span></span>
+        <span>Bağlı: <b id="sessName"></b> <span id="sessRemote" class="muted mono"></span> <span id="sessTime" class="muted"></span></span>
         <button id="kick" class="danger small">Bağlantıyı kes</button>
       </div>
     </section>
@@ -53,6 +62,8 @@
       <h2>Uzak Bilgisayar</h2>
       <p class="muted">Bağlanmak istediğin bilgisayarın ID'sini ve şifresini gir.</p>
       <form id="connectForm" autocomplete="off">
+        <label class="lbl" for="myName">Adın (karşı tarafta imlecin yanında görünür)</label>
+        <input id="myName" type="text" maxlength="32" spellcheck="false" placeholder="Adın">
         <label class="lbl" for="remoteId">ID</label>
         <input id="remoteId" type="text" placeholder="ornek-kelime-kelime-kelime" spellcheck="false" required>
         <label class="lbl" for="remotePw">Şifre</label>
@@ -67,7 +78,7 @@
   <div id="modal" class="modal hidden">
     <div class="dialog">
       <h3>Bağlantı isteği</h3>
-      <p><b id="reqRemote" class="mono"></b> bu bilgisayarı kontrol etmek istiyor.</p>
+      <p><b id="reqName"></b> <span id="reqRemote" class="muted mono"></span> bu bilgisayarı kontrol etmek istiyor.</p>
       <p class="muted">Tanımıyorsan reddet.</p>
       <div class="bar-timer"><div id="reqBar"></div></div>
       <div class="row">

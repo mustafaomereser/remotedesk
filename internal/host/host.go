@@ -7,8 +7,10 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
@@ -18,11 +20,13 @@ type Server struct {
 	// Auth, verilen şifre doğruysa true döner.
 	Auth func(pw string) bool
 	// Confirm, kullanıcıdan bağlantı onayı ister (nil ise otomatik kabul).
-	Confirm func(ctx context.Context, remote string) bool
+	Confirm func(ctx context.Context, remote, name string) bool
 	// OnSession, oturum başladığında/bittiğinde çağrılır.
-	OnSession func(remote string, active bool)
+	OnSession func(remote, name string, active bool)
 	// Video, H.264 için ffmpeg hazırsa yolunu ve kodlayıcıyı döner (nil olabilir).
 	Video VideoInfo
+	// Concurrent, "aynı anda kullanım" (simülasyon modu) açıksa true döner (nil olabilir).
+	Concurrent func() bool
 
 	mu        sync.Mutex
 	active    context.CancelFunc
@@ -46,6 +50,22 @@ type message struct {
 	Codec string  `json:"codec,omitempty"`
 	TS    float64 `json:"ts,omitempty"`
 	Text  string  `json:"text,omitempty"`
+	Name  string  `json:"name,omitempty"`
+	Ch    string  `json:"ch,omitempty"` // tuşun ürettiği karakter (simülasyon modu için)
+}
+
+// cleanName, viewer'ın gönderdiği adı ekranda gösterilebilir hale getirir.
+func cleanName(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, strings.TrimSpace(s))
+	if r := []rune(s); len(r) > 32 {
+		s = string(r[:32])
+	}
+	return s
 }
 
 func (s *Server) Handler() http.Handler {
@@ -93,6 +113,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	remote := remoteAddr(r)
+	var name string
 
 	actx, acancel := context.WithTimeout(ctx, 15*time.Second)
 	var m message
@@ -100,6 +121,10 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	acancel()
 	if err != nil || m.T != "auth" {
 		return
+	}
+	name = cleanName(m.Name)
+	if name == "" {
+		name = "Uzak kullanıcı"
 	}
 
 	if wait := s.lockedFor(); wait > 0 {
@@ -123,18 +148,20 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 
 	if s.Confirm != nil {
 		wsjson.Write(ctx, c, map[string]string{"t": "wait"})
-		if !s.Confirm(ctx, remote) {
+		if !s.Confirm(ctx, remote, name) {
 			sendErr(ctx, c, "Bağlantı karşı tarafça reddedildi.")
 			return
 		}
 	}
 
-	log.Printf("oturum başladı: %s", remote)
+	log.Printf("oturum başladı: %s (%s)", remote, name)
 	if s.OnSession != nil {
-		s.OnSession(remote, true)
-		defer s.OnSession(remote, false)
+		s.OnSession(remote, name, true)
+		defer s.OnSession(remote, name, false)
 	}
 	sess := newSession(c, s.Video, m.H264)
+	sess.name = name
+	sess.concurrent = s.Concurrent
 	if m.V >= 10 && m.V <= 95 {
 		sess.quality.Store(int32(m.V))
 	}

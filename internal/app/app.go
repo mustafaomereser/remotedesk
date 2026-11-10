@@ -14,8 +14,10 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"os/user"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -39,12 +41,14 @@ type Options struct {
 }
 
 type Session struct {
+	Name   string `json:"name"`
 	Remote string `json:"remote"`
 	Since  int64  `json:"since"`
 }
 
 type Pending struct {
 	ID      string `json:"id"`
+	Name    string `json:"name"`
 	Remote  string `json:"remote"`
 	Expires int64  `json:"expires"`
 }
@@ -64,6 +68,7 @@ type State struct {
 	ID         string   `json:"id"`
 	Password   string   `json:"password"`
 	AutoAccept bool     `json:"autoAccept"`
+	Concurrent bool     `json:"concurrent"` // aynı anda kullanım (simülasyon modu)
 	Session    *Session `json:"session"`
 	Pending    *Pending `json:"pending"`
 	Perms      Perms    `json:"perms"`
@@ -111,7 +116,10 @@ func New(o Options) *App {
 			Password: pw, AutoAccept: o.AutoAccept,
 		},
 	}
-	a.host = &host.Server{Auth: a.checkPassword, Confirm: a.confirm, OnSession: a.onSession, Video: a.videoInfo}
+	a.host = &host.Server{
+		Auth: a.checkPassword, Confirm: a.confirm, OnSession: a.onSession,
+		Video: a.videoInfo, Concurrent: a.concurrent,
+	}
 	if sysutil.PermissionsNeeded() {
 		sysutil.RequestPermissions()
 		a.st.Perms = currentPerms()
@@ -248,17 +256,23 @@ func (a *App) checkPassword(pw string) bool {
 	return subtle.ConstantTimeCompare([]byte(pw), []byte(want)) == 1
 }
 
-func (a *App) onSession(remote string, active bool) {
+func (a *App) concurrent() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.st.Concurrent
+}
+
+func (a *App) onSession(remote, name string, active bool) {
 	a.update(func(s *State) {
 		if active {
-			s.Session = &Session{Remote: remote, Since: time.Now().UnixMilli()}
+			s.Session = &Session{Name: name, Remote: remote, Since: time.Now().UnixMilli()}
 		} else {
 			s.Session = nil
 		}
 	})
 }
 
-func (a *App) confirm(ctx context.Context, remote string) bool {
+func (a *App) confirm(ctx context.Context, remote, name string) bool {
 	a.mu.Lock()
 	if a.st.AutoAccept {
 		a.mu.Unlock()
@@ -273,7 +287,7 @@ func (a *App) confirm(ctx context.Context, remote string) bool {
 	ch := make(chan bool, 1)
 	a.pending[id] = ch
 	const timeout = 30 * time.Second
-	a.st.Pending = &Pending{ID: id, Remote: remote, Expires: time.Now().Add(timeout).UnixMilli()}
+	a.st.Pending = &Pending{ID: id, Name: name, Remote: remote, Expires: time.Now().Add(timeout).UnixMilli()}
 	a.broadcastLocked()
 	a.mu.Unlock()
 
@@ -445,6 +459,21 @@ func (a *App) uiHandler() http.Handler {
 	mux.HandleFunc("GET /api/events", a.handleEvents)
 	mux.HandleFunc("POST /api/host/password", a.handlePassword)
 	mux.HandleFunc("POST /api/host/autoaccept", a.handleAutoAccept)
+	mux.HandleFunc("POST /api/host/concurrent", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Value bool `json:"value"`
+		}
+		if err := readJSON(r, &body); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		a.update(func(s *State) { s.Concurrent = body.Value })
+		writeOK(w)
+	})
+	mux.HandleFunc("GET /api/me", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"name": defaultName()})
+	})
 	mux.HandleFunc("POST /api/host/confirm", a.handleConfirm)
 	mux.HandleFunc("POST /api/host/kick", func(w http.ResponseWriter, r *http.Request) {
 		a.host.Kick()
@@ -684,6 +713,22 @@ func (a *App) watchdog() {
 }
 
 // ---- yardımcılar ----
+
+// defaultName, viewer'daki "Adın" alanının varsayılanıdır: işletim sistemindeki ad.
+func defaultName() string {
+	u, err := user.Current()
+	if err != nil {
+		return ""
+	}
+	if n := strings.TrimSpace(u.Name); n != "" {
+		return n
+	}
+	name := u.Username
+	if i := strings.LastIndexByte(name, '\\'); i >= 0 { // Windows: ALAN\kullanıcı
+		name = name[i+1:]
+	}
+	return name
+}
 
 func genPassword() string {
 	return randString(8, "abcdefghjkmnpqrstuvwxyz23456789")

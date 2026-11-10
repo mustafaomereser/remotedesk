@@ -11,11 +11,12 @@ import (
 	"runtime"
 
 	"remotedesk/internal/app"
+	"remotedesk/internal/desktop"
 	"remotedesk/internal/sysutil"
 )
 
 // appVersion, sürüm paketlerinde (scripts/build-release.sh) kullanılır.
-const appVersion = "0.1.4"
+const appVersion = "0.1.5"
 
 func dataDir() string {
 	if runtime.GOOS == "windows" {
@@ -29,6 +30,12 @@ func dataDir() string {
 }
 
 func main() {
+	// macOS'ta ana iş parçacığı AppKit olay döngüsüne ayrılır (ad etiketi penceresi için);
+	// uygulama ayrı bir goroutine'de çalışır. Windows'ta run doğrudan çağrılır.
+	desktop.RunMain(run)
+}
+
+func run() {
 	headless := flag.Bool("headless", false, "Pencere açmadan çalış (ID ve şifre konsola yazılır)")
 	autoAccept := flag.Bool("autoaccept", false, "Gelen bağlantıları onay sormadan kabul et")
 	password := flag.String("password", "", "Sabit şifre (boşsa rastgele üretilir)")
