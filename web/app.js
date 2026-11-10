@@ -2,6 +2,7 @@
 
 const $ = (id) => document.getElementById(id);
 let state = null;
+Object.defineProperty(window, 'state', { get: () => state });
 let showPw = false;
 
 // Viewer penceresi açıldığında bağlantı bilgisini buradan alır (şifre URL'ye yazılmaz).
@@ -501,3 +502,61 @@ function renderPeers() {
 loadPeers();
 setInterval(loadPeers, 5000);
 connectEvents();
+
+// ---- sesli görüşme (bağlanan kişiyle) ----
+
+const hcall = new VoiceCall({
+  send: (m) => fetch('/api/rtc', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(m) })
+    .then((r) => { if (!r.ok) throw new Error(); })
+    .catch(() => { hcall.cleanup(); hcall.set('error', 'Bağlı kimse yok.'); }),
+  onState: renderHostCall,
+});
+
+function renderHostCall(state, info) {
+  const btn = $('hCall');
+  btn.classList.toggle('danger', state === 'calling' || state === 'connecting' || state === 'active');
+  btn.textContent = state === 'calling' ? 'Aramayı iptal et'
+    : state === 'connecting' || state === 'active' ? 'Görüşmeyi kapat'
+    : 'Sesli görüşme';
+  btn.classList.toggle('hidden', state === 'incoming');
+  $('hMute').classList.toggle('hidden', state !== 'active');
+  if (state !== 'active') $('hMute').textContent = 'Sessize al';
+  const bar = $('hCallBar');
+  if (state === 'incoming') {
+    const who = (state && window.state && window.state.session && window.state.session.name) || 'Bağlanan kişi';
+    $('hCallText').textContent = who + ' sesli görüşme başlatmak istiyor.';
+    $('hAccept').classList.remove('hidden');
+    $('hReject').textContent = 'Reddet';
+    bar.classList.remove('hidden');
+    try { new Notification('RemoteDesk', { body: $('hCallText').textContent }); } catch {}
+  } else if (info && (state === 'error' || state === 'idle' || state === 'calling')) {
+    $('hCallText').textContent = info;
+    $('hAccept').classList.add('hidden');
+    $('hReject').textContent = state === 'calling' ? 'İptal' : 'Tamam';
+    bar.classList.remove('hidden');
+    if (state !== 'calling') setTimeout(() => { if (hcall.state === state) bar.classList.add('hidden'); }, 6000);
+  } else {
+    bar.classList.add('hidden');
+  }
+}
+
+$('hCall').onclick = () => {
+  if (hcall.state === 'idle' || hcall.state === 'error') hcall.start();
+  else hcall.hangup();
+};
+$('hMute').onclick = (e) => { e.target.textContent = hcall.toggleMute() ? 'Sesi aç' : 'Sessize al'; };
+$('hAccept').onclick = () => hcall.accept();
+$('hReject').onclick = () => {
+  if (hcall.state === 'incoming') hcall.reject();
+  else if (hcall.state === 'calling') hcall.hangup();
+  $('hCallBar').classList.add('hidden');
+};
+
+(function rtcEvents() {
+  const es = new EventSource('/api/rtc/events');
+  es.onmessage = (e) => {
+    let m;
+    try { m = JSON.parse(e.data); } catch { return; }
+    hcall.handle(m);
+  };
+})();

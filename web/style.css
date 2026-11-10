@@ -443,3 +443,15 @@ button.icon.on { color: var(--warn); }
 .wl-card .hint { margin: 0; text-align: center; }
 body.web .vset .vrow:has(#clipSync) { display: none; }
 body.login .vbar, body.login .vwarn { display: none; }
+
+/* ---- sesli görüşme ---- */
+
+.callbar {
+  flex: none; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 8px 14px; font-size: 13px;
+  background: rgba(61, 214, 140, .08); border-bottom: 1px solid rgba(61, 214, 140, .35);
+}
+.callbar .spacer { flex: 1; }
+.callbar.inbox { flex-basis: 100%; border: 1px solid rgba(61, 214, 140, .35); border-radius: 10px; }
+.session-acts { display: flex; gap: 6px; flex-wrap: wrap; }
+.call-btns { display: flex; gap: 6px; flex: none; }

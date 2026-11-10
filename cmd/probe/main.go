@@ -35,6 +35,7 @@ func main() {
 	h264 := flag.Bool("h264", false, "H.264 iste")
 	h264out := flag.String("h264out", "", "H.264 akışını bu dosyaya yaz")
 	name := flag.String("name", "", "bağlanırken gönderilecek ad (imleç etiketi)")
+	rtc := flag.String("rtc", "", "bağlanınca bu sesli görüşme sinyalini (JSON) gönder")
 	click := flag.String("click", "", "bağlanınca bu noktaya (x,y, kare koordinatı) sol tık gönder")
 	move := flag.Bool("move", false, "bağlanınca fareyi ekranın ortasında daire çizerek gezdir")
 	flag.Parse()
@@ -97,6 +98,11 @@ func main() {
 				if *clip != "" {
 					wsjson.Write(ctx, c, map[string]string{"t": "clip", "text": *clip})
 					*clip = ""
+				}
+				if *rtc != "" {
+					wsjson.Write(ctx, c, map[string]any{"t": "rtc", "rtc": json.RawMessage(*rtc)})
+					log.Printf("rtc gönderildi")
+					*rtc = ""
 				}
 				if *click != "" {
 					var cx, cy int

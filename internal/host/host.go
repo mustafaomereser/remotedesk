@@ -4,6 +4,8 @@ package host
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"io/fs"
 	"log"
 	"net"
@@ -27,7 +29,9 @@ type Server struct {
 	// Browser, tünel adresinin tarayıcıda açılıp açılamayacağını söyler (nil: kapalı).
 	// Açıksa "/" adresinde şifre soran izleme sayfası (WebFS'teki view.html) sunulur.
 	Browser func() bool
-	WebFS   fs.FS
+	// OnRTC, bağlanan kişiden gelen sesli görüşme sinyalini (WebRTC) yerel arayüze iletir.
+	OnRTC func(msg json.RawMessage)
+	WebFS fs.FS
 	// Confirm, kullanıcıdan bağlantı onayı ister (nil ise otomatik kabul).
 	Confirm func(ctx context.Context, remote, name string) bool
 	// OnSession, oturum başladığında/bittiğinde çağrılır.
@@ -39,6 +43,7 @@ type Server struct {
 
 	mu        sync.Mutex
 	active    context.CancelFunc
+	sess      *session // aktif oturum (sesli görüşme sinyalini iletmek için)
 	fails     int
 	lockUntil time.Time
 	unauthed  int // henüz şifresini göndermemiş bağlantı sayısı
@@ -91,23 +96,24 @@ type Perms struct {
 }
 
 type message struct {
-	T     string  `json:"t"`
-	Pw    string  `json:"pw,omitempty"`
-	X     int     `json:"x,omitempty"`
-	Y     int     `json:"y,omitempty"`
-	B     int     `json:"b,omitempty"`
-	D     bool    `json:"d,omitempty"`
-	DX    int     `json:"dx,omitempty"`
-	DY    int     `json:"dy,omitempty"`
-	C     string  `json:"c,omitempty"`
-	V     int     `json:"v,omitempty"`
-	I     int     `json:"i,omitempty"`
-	H264  bool    `json:"h264,omitempty"`
-	Codec string  `json:"codec,omitempty"`
-	TS    float64 `json:"ts,omitempty"`
-	Text  string  `json:"text,omitempty"`
-	Name  string  `json:"name,omitempty"`
-	Ch    string  `json:"ch,omitempty"` // tuşun ürettiği karakter (simülasyon modu için)
+	T     string          `json:"t"`
+	Pw    string          `json:"pw,omitempty"`
+	X     int             `json:"x,omitempty"`
+	Y     int             `json:"y,omitempty"`
+	B     int             `json:"b,omitempty"`
+	D     bool            `json:"d,omitempty"`
+	DX    int             `json:"dx,omitempty"`
+	DY    int             `json:"dy,omitempty"`
+	C     string          `json:"c,omitempty"`
+	V     int             `json:"v,omitempty"`
+	I     int             `json:"i,omitempty"`
+	H264  bool            `json:"h264,omitempty"`
+	Codec string          `json:"codec,omitempty"`
+	TS    float64         `json:"ts,omitempty"`
+	Text  string          `json:"text,omitempty"`
+	Name  string          `json:"name,omitempty"`
+	Ch    string          `json:"ch,omitempty"`  // tuşun ürettiği karakter (simülasyon modu için)
+	RTC   json.RawMessage `json:"rtc,omitempty"` // sesli görüşme sinyali (WebRTC)
 }
 
 // cleanName, viewer'ın gönderdiği adı ekranda gösterilebilir hale getirir.
@@ -152,6 +158,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /{$}", page("view.html", "text/html; charset=utf-8"))
 	mux.HandleFunc("GET /view.js", page("view.js", "text/javascript; charset=utf-8"))
 	mux.HandleFunc("GET /style.css", page("style.css", "text/css; charset=utf-8"))
+	mux.HandleFunc("GET /rtc.js", page("rtc.js", "text/javascript; charset=utf-8"))
 	mux.HandleFunc("/", http.NotFound)
 	return mux
 }
@@ -178,6 +185,19 @@ func fromBrowser(r *http.Request) bool {
 	}
 	h := u.Hostname()
 	return h != "127.0.0.1" && h != "localhost" && h != "::1"
+}
+
+// SendRTC, yerel arayüzden gelen sesli görüşme sinyalini bağlanan kişiye iletir.
+func (s *Server) SendRTC(msg json.RawMessage) error {
+	s.mu.Lock()
+	sess := s.sess
+	s.mu.Unlock()
+	if sess == nil {
+		return errors.New("aktif oturum yok")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return wsjson.Write(ctx, sess.c, map[string]any{"t": "rtc", "rtc": msg})
 }
 
 // Kick aktif oturumu sonlandırır.
@@ -276,6 +296,15 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	sess.name = name
 	sess.concurrent = s.Concurrent
 	sess.perms = s.Perms
+	sess.onRTC = s.OnRTC
+	s.mu.Lock()
+	s.sess = sess
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.sess = nil
+		s.mu.Unlock()
+	}()
 	if unattended {
 		log.Printf("sabit şifreyle bağlanıldı (gözetimsiz erişim): %s", remote)
 	}

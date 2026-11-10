@@ -36,9 +36,17 @@
           <label class="vrow"><span>Gerçek boyut</span><input type="checkbox" class="switch" id="scale"></label>
         </div>
       </details>
+      <button id="callBtn" class="small" title="Karşı tarafla sesli konuş">Sesli görüşme</button>
+      <button id="muteBtn" class="small hidden">Sessize al</button>
       <button id="fs" class="small">Tam ekran</button>
       <button id="disc" class="danger small">Bağlantıyı kes</button>
     </div>
+  </div>
+  <div id="callBar" class="callbar hidden">
+    <span id="callText"></span>
+    <span class="spacer"></span>
+    <span class="call-btns"><button id="callAccept" class="primary small">Kabul et</button>
+    <button id="callReject" class="small">Reddet</button></span>
   </div>
   <div id="vwarn" class="vwarn hidden"></div>
   <div id="stage" class="stage">
@@ -64,6 +72,7 @@
     </form>
   </div>
   <div id="toast" class="toast"></div>
+  <script src="rtc.js"></script>
   <script src="view.js"></script>
 </body>
 </html>

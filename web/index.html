@@ -69,7 +69,17 @@
           <span class="dot ok"></span>
           <span>Bağlı: <b id="sessName"></b> <span id="sessRemote" class="muted mono"></span> <span id="sessTime" class="muted"></span></span>
         </div>
-        <button id="kick" class="danger small">Bağlantıyı kes</button>
+        <div class="session-acts">
+          <button id="hCall" class="small" title="Bağlanan kişiyle sesli konuş">Sesli görüşme</button>
+          <button id="hMute" class="small hidden">Sessize al</button>
+          <button id="kick" class="danger small">Bağlantıyı kes</button>
+        </div>
+        <div id="hCallBar" class="callbar inbox hidden">
+          <span id="hCallText"></span>
+          <span class="spacer"></span>
+          <span class="call-btns"><button id="hAccept" class="primary small">Kabul et</button>
+          <button id="hReject" class="small">Reddet</button></span>
+        </div>
       </div>
 
       <div class="rows">
@@ -271,6 +281,7 @@
   </div>
 
   <div id="toast" class="toast"></div>
+  <script src="rtc.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

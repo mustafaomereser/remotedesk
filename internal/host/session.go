@@ -3,6 +3,7 @@ package host
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -51,6 +52,7 @@ type session struct {
 	name       string      // bağlanan kişinin adı (imleç etiketi)
 	concurrent func() bool // "aynı anda kullanım" açık mı
 	perms      func() Perms
+	onRTC      func(json.RawMessage)
 	statSent   bool
 	lastPerms  Perms
 	lastSecure bool
@@ -226,6 +228,10 @@ func (s *session) readLoop(ctx context.Context) {
 			}
 		case "ping":
 			wsjson.Write(ctx, s.c, map[string]any{"t": "pong", "ts": m.TS})
+		case "rtc":
+			if s.onRTC != nil && len(m.RTC) > 0 && len(m.RTC) < 64<<10 {
+				s.onRTC(m.RTC)
+			}
 		}
 	}
 }

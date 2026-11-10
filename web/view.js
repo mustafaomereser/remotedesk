@@ -122,6 +122,7 @@ function openSocket(target, pw, name, retries) {
   };
   ws.onmessage = onMessage;
   ws.onclose = () => {
+    if (typeof call !== 'undefined' && call.state !== 'idle') { call.cleanup(); call.set('idle'); }
     connected = false;
     clearInputs(false);
     if (failed) return;
@@ -176,6 +177,9 @@ function onMessage(ev) {
         failed = true;
         if (webMode && !everConnected) showWebLogin(m.msg || 'Bağlanılamadı.');
         else showOverlay(m.msg || 'Hata', true);
+        break;
+      case 'rtc':
+        call.handle(m.rtc);
         break;
       case 'perm':
         controlAllowed = !!m.control;
@@ -608,3 +612,57 @@ $('disc').onclick = () => {
   if (ws) ws.close();
   window.close();
 };
+
+// ---- sesli görüşme ----
+
+const call = new VoiceCall({
+  send: (m) => send({ t: 'rtc', rtc: m }),
+  onState: renderCall,
+});
+
+function renderCall(state, info) {
+  const btn = $('callBtn');
+  btn.classList.toggle('danger', state !== 'idle' && state !== 'error' && state !== 'incoming');
+  btn.textContent = state === 'calling' ? 'Aramayı iptal et'
+    : state === 'connecting' || state === 'active' ? 'Görüşmeyi kapat'
+    : 'Sesli görüşme';
+  btn.classList.toggle('hidden', state === 'incoming');
+  $('muteBtn').classList.toggle('hidden', state !== 'active');
+  if (state !== 'active') $('muteBtn').textContent = 'Sessize al';
+  const bar = $('callBar');
+  if (state === 'incoming') {
+    $('callText').textContent = 'Karşı taraf sesli görüşme başlatmak istiyor.';
+    $('callAccept').classList.remove('hidden');
+    $('callReject').textContent = 'Reddet';
+    bar.classList.remove('hidden');
+  } else if (info && (state === 'error' || state === 'idle' || state === 'calling' || state === 'connecting')) {
+    $('callText').textContent = info;
+    $('callAccept').classList.add('hidden');
+    $('callReject').textContent = state === 'calling' || state === 'connecting' ? 'İptal' : 'Tamam';
+    bar.classList.remove('hidden');
+    if (state === 'error' || state === 'idle') setTimeout(() => { if (call.state === state) bar.classList.add('hidden'); }, 6000);
+  } else {
+    bar.classList.add('hidden');
+  }
+}
+
+$('callBtn').onclick = (e) => {
+  e.target.blur();
+  if (!connected) return;
+  if (call.state === 'idle' || call.state === 'error') call.start();
+  else call.hangup();
+  canvas.focus();
+};
+$('muteBtn').onclick = (e) => {
+  e.target.textContent = call.toggleMute() ? 'Sesi aç' : 'Sessize al';
+  e.target.blur();
+  canvas.focus();
+};
+$('callAccept').onclick = () => { call.accept(); canvas.focus(); };
+$('callReject').onclick = () => {
+  if (call.state === 'incoming') call.reject();
+  else if (call.state === 'calling' || call.state === 'connecting') call.hangup();
+  $('callBar').classList.add('hidden');
+  canvas.focus();
+};
+window.addEventListener('beforeunload', () => call.hangup());

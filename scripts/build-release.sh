@@ -76,15 +76,16 @@ make_app() { # klasör — Apple Silicon + Intel tek "universal" binary
   <key>LSMinimumSystemVersion</key><string>12.0</string>
   <key>LSUIElement</key><false/>
   <key>NSHighResolutionCapable</key><true/>
+  <key>NSMicrophoneUsageDescription</key><string>Bağlanan kişiyle sesli görüşme için mikrofon kullanılır.</string>
 </dict>
 </plist>
 PLIST
   if [ "$MAC_SIGN" = 2 ]; then
     rcodesign sign --pem-file "$APPLE_SIGN_DIR/devid.key" --certificate-der-file "$APPLE_SIGN_DIR/devid.cer" \
-      --for-notarization "$app" >/dev/null
+      --entitlements-xml-path packaging/entitlements.plist --for-notarization "$app" >/dev/null
     NOTARIZE+=("$app")
   else
-    rcodesign sign "$app" >/dev/null
+    rcodesign sign --entitlements-xml-path packaging/entitlements.plist "$app" >/dev/null
   fi
   [ -s "$app/Contents/_CodeSignature/CodeResources" ] || { echo "HATA: imza oluşmadı: $app" >&2; exit 1; }
   echo "  imzalandı: $1"

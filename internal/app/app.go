@@ -143,6 +143,8 @@ type App struct {
 	dev      hub.Device    // sunucudaki kimlik (mu ile korunur)
 	onlineCh chan struct{} // çevrimiçi durumu ya da ID değişti: sunucu bağlantısını yeniden değerlendir
 	upd      *update.Release
+
+	rtcSubs map[chan []byte]struct{} // sesli görüşme sinyali dinleyen ana pencere(ler)
 }
 
 func New(o Options) *App {
@@ -153,6 +155,7 @@ func New(o Options) *App {
 	a := &App{
 		tunnelReq: make(chan bool, 4),
 		onlineCh:  make(chan struct{}, 1),
+		rtcSubs:   map[chan []byte]struct{}{},
 		uiToken:   randString(32, "abcdef0123456789"),
 		opts:      o,
 		subs:      map[chan []byte]struct{}{},
@@ -177,7 +180,7 @@ func New(o Options) *App {
 	a.host = &host.Server{
 		Auth: a.checkPassword, Confirm: a.confirm, OnSession: a.onSession,
 		Video: a.videoInfo, Concurrent: a.concurrent, Perms: a.permissions,
-		Browser: a.browserAllowed, WebFS: web.FS,
+		Browser: a.browserAllowed, WebFS: web.FS, OnRTC: a.pushRTC,
 	}
 	a.peers.load(o.DataDir)
 	if sysutil.PermissionsNeeded() {
@@ -319,6 +322,9 @@ func (a *App) concurrent() bool {
 
 func (a *App) onSession(remote, name string, active bool) {
 	a.tunnelNeeded.Store(time.Now().UnixNano())
+	if !active {
+		a.pushRTC(json.RawMessage(`{"type":"bye"}`)) // oturum bitti: açık görüşme kapansın
+	}
 	a.update(func(s *State) {
 		if active {
 			s.Session = &Session{Name: name, Remote: remote, Since: time.Now().UnixMilli()}
@@ -572,6 +578,8 @@ func (a *App) uiHandler() http.Handler {
 	mux.HandleFunc("GET /api/events", a.handleEvents)
 	mux.HandleFunc("POST /api/host/password", a.handlePassword)
 	mux.HandleFunc("POST /api/settings", a.handleSettings)
+	mux.HandleFunc("GET /api/rtc/events", a.handleRTCEvents)
+	mux.HandleFunc("POST /api/rtc", a.handleRTCSend)
 	mux.HandleFunc("POST /api/settings/fixedpw", a.handleFixedPassword)
 	mux.HandleFunc("POST /api/settings/rename", a.handleRename)
 	mux.HandleFunc("POST /api/elevate", a.handleElevate)
