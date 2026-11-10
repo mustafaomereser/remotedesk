@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coder/websocket"
@@ -166,7 +167,36 @@ type Client struct {
 	OnOpen func(ctx context.Context) (string, error)
 	// OnState, sunucu bağlantısı kurulduğunda/koptuğunda çağrılır.
 	OnState func(online bool)
+	// Hello, her bağlanışta sunucuya gönderilen durum: gelen bağlantılara açık mı ve
+	// çevrimiçi durumu izlenecek cihazlar.
+	Hello func() (avail bool, watch []string)
+	// OnPresence, izlenen cihazların çevrimiçi durumu değişince (ve ilk bağlanışta) çağrılır.
+	OnPresence func(map[string]bool)
+
+	mu   sync.Mutex
+	conn *websocket.Conn
 }
+
+// Send, açık sunucu bağlantısına mesaj gönderir (bağlı değilse sessizce geçer;
+// yeniden bağlanınca Hello zaten son durumu gönderir).
+func (c *Client) Send(v any) {
+	c.mu.Lock()
+	conn := c.conn
+	c.mu.Unlock()
+	if conn == nil {
+		return
+	}
+	b, _ := json.Marshal(v)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	conn.Write(ctx, websocket.MessageText, b)
+}
+
+// SetAvailable, gelen bağlantılara açık/kapalı bilgisini sunucuya bildirir.
+func (c *Client) SetAvailable(on bool) { c.Send(map[string]any{"t": "avail", "on": on}) }
+
+// Watch, çevrimiçi durumu izlenecek cihaz listesini günceller.
+func (c *Client) Watch(ids []string) { c.Send(map[string]any{"t": "watch", "ids": ids}) }
 
 // Run, ctx bitene kadar bağlı kalır; koparsa artan aralıklarla yeniden bağlanır.
 func (c *Client) Run(ctx context.Context) {
@@ -202,7 +232,33 @@ func (c *Client) session(ctx context.Context) error {
 		return err
 	}
 	defer conn.CloseNow()
-	conn.SetReadLimit(4096)
+	conn.SetReadLimit(16 << 10)
+	c.mu.Lock()
+	c.conn = conn
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		if c.conn == conn {
+			c.conn = nil
+		}
+		c.mu.Unlock()
+	}()
+	hello := map[string]any{"t": "hello", "avail": false, "watch": []string{}}
+	if c.Hello != nil {
+		avail, watch := c.Hello()
+		if watch == nil {
+			watch = []string{}
+		}
+		hello["avail"], hello["watch"] = avail, watch
+	}
+	if b, _ := json.Marshal(hello); true {
+		wctx, wcancel := context.WithTimeout(ctx, 10*time.Second)
+		err := conn.Write(wctx, websocket.MessageText, b)
+		wcancel()
+		if err != nil {
+			return err
+		}
+	}
 	c.OnState(true)
 
 	ctx, stop := context.WithCancel(ctx)
@@ -248,10 +304,20 @@ func (c *Client) session(ctx context.Context) error {
 			continue
 		}
 		var m struct {
-			T   string `json:"t"`
-			Req string `json:"req"`
+			T   string          `json:"t"`
+			Req string          `json:"req"`
+			S   map[string]bool `json:"s"`
 		}
-		if json.Unmarshal(data, &m) != nil || m.T != "open" || m.Req == "" {
+		if json.Unmarshal(data, &m) != nil {
+			continue
+		}
+		if m.T == "presence" {
+			if c.OnPresence != nil && m.S != nil {
+				c.OnPresence(m.S)
+			}
+			continue
+		}
+		if m.T != "open" || m.Req == "" {
 			continue
 		}
 		go func(req string) {

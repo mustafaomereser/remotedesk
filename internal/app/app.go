@@ -146,6 +146,9 @@ type App struct {
 
 	rtcSubs map[chan []byte]struct{} // sesli görüşme sinyali dinleyen ana pencere(ler)
 	viewers viewerSet
+
+	hubc         *hub.Client // sunucu bağlantısı (mu ile korunur)
+	hubConnected bool
 }
 
 func New(o Options) *App {

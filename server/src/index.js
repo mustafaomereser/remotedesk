@@ -6,6 +6,9 @@
 //
 //   POST /register            {secret}            -> {id}
 //   GET  /host?id=..          (WebSocket, Authorization: Bearer <secret>)  cihazın kalıcı bağlantısı
+//        cihaz -> sunucu: {t:"hello", avail, watch:[id]}  {t:"avail", on}  {t:"watch", ids:[id]}  {t:"url", req, url|err}
+//        sunucu -> cihaz: {t:"open", req}  {t:"presence", s:{id: bool}}
+//        Çevrimiçi bilgisi sorgulanmaz, değişince izleyenlere gönderilir (kota dostu).
 //   GET  /status?ids=a,b,c                        -> {a:true, b:false}
 //   POST /connect             {id}                -> {url}   (cihaza "tünel aç" der, adresi bekler)
 //   POST /rename              {id, secret, newId} -> {id}    (newId boşsa rastgele yeni ID)
@@ -68,10 +71,12 @@ export class Hub {
     return ++h.n > max;
   }
 
-  online(id) {
+  online(id, except) {
     const now = Date.now();
     for (const ws of this.state.getWebSockets(id)) {
+      if (ws === except) continue; // kapanmakta olan bağlantı
       const att = ws.deserializeAttachment() || {};
+      if (!att.avail) continue;
       const ping = this.state.getWebSocketAutoResponseTimestamp(ws);
       const seen = Math.max(att.at || 0, ping ? ping.getTime() : 0);
       if (now - seen < PING_STALE_MS) return ws;
@@ -209,8 +214,25 @@ function fail(t){document.getElementById('sp').remove();m.className='e';m.textCo
     }
     const pair = new WebSocketPair();
     this.state.acceptWebSocket(pair[1], [id]);
-    pair[1].serializeAttachment({ id, at: Date.now() });
+    pair[1].serializeAttachment({ id, at: Date.now(), avail: false, watch: [] });
     return new Response(null, { status: 101, webSocket: pair[0] });
+  }
+
+  // notify: id'nin çevrimiçi durumu değişti; onu izleyen cihazlara bildir.
+  notify(id, on) {
+    const msg = JSON.stringify({ t: "presence", s: { [id]: on } });
+    for (const ws of this.state.getWebSockets()) {
+      const att = ws.deserializeAttachment() || {};
+      if (att.id !== id && Array.isArray(att.watch) && att.watch.includes(id)) {
+        try { ws.send(msg); } catch {}
+      }
+    }
+  }
+
+  snapshot(ws, ids) {
+    const s = {};
+    for (const id of ids) s[id] = !!this.online(id);
+    try { ws.send(JSON.stringify({ t: "presence", s })); } catch {}
   }
 
   status(url, ip) {
@@ -255,17 +277,39 @@ function fail(t){document.getElementById('sp').remove();m.className='e';m.textCo
   }
 
   webSocketMessage(ws, msg) {
-    if (typeof msg !== "string" || msg.length > 2048) return;
+    if (typeof msg !== "string" || msg.length > 4096) return;
     let m;
     try { m = JSON.parse(msg); } catch { return; }
-    if (m && m.t === "url" && typeof m.req === "string") {
-      const resolve = this.pending.get(m.req);
-      if (resolve) resolve(m);
+    if (!m || typeof m.t !== "string") return;
+    const att = ws.deserializeAttachment() || {};
+    const cleanIds = (a) => (Array.isArray(a) ? [...new Set(a.filter(validId))].slice(0, 100) : []);
+    switch (m.t) {
+      case "url": {
+        const resolve = typeof m.req === "string" && this.pending.get(m.req);
+        if (resolve) resolve(m);
+        return;
+      }
+      case "hello":
+      case "avail":
+      case "watch": {
+        const was = !!att.avail;
+        if (m.t === "hello") att.avail = !!m.avail;
+        if (m.t === "avail") att.avail = !!m.on;
+        if (m.t === "hello" || m.t === "watch") att.watch = cleanIds(m.t === "hello" ? m.watch : m.ids);
+        att.at = Date.now();
+        ws.serializeAttachment(att);
+        if (was !== att.avail) this.notify(att.id, att.avail);
+        if (m.t !== "avail") this.snapshot(ws, att.watch);
+        return;
+      }
     }
   }
 
   webSocketClose(ws, code) {
+    const att = ws.deserializeAttachment() || {};
     try { ws.close(code === 1005 || code === 1006 ? 1000 : code, ""); } catch {}
+    // Aynı cihazın yeni bağlantısı yoksa çevrimdışı oldu.
+    if (att.avail && att.id && !this.online(att.id, ws)) this.notify(att.id, false);
   }
 
   webSocketError() {}

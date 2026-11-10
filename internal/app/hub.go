@@ -56,8 +56,11 @@ func (a *App) hubLoop(ctx context.Context) {
 	a.announce()
 	go a.tunnelIdleLoop(ctx)
 
-	// Sunucu bağlantısı yalnızca "gelen bağlantılara açık" iken tutulur. Kapalıyken
-	// cihaz sunucuda çevrimdışı görünür ve kimse bağlanamaz. ID değişince yeniden kurulur.
+	// Sunucuya tek bağlantı uygulama açık kaldıkça tutulur. "Gelen bağlantılara açık"
+	// kapalıyken de açık kalır (cihaz listesinin çevrimiçi bilgisi için) ama sunucuya
+	// "müsait değilim" denir: kimse bağlanamaz, başkalarına çevrimdışı görünür.
+	// Çevrimiçi bilgisi sorgulanmaz; sunucu değişince kendisi bildirir (kota dostu).
+	// ID değişince bağlantı yeni kimlikle yeniden kurulur.
 	var stop context.CancelFunc
 	var done chan struct{}
 	halt := func() {
@@ -68,39 +71,77 @@ func (a *App) hubLoop(ctx context.Context) {
 		}
 	}
 	defer halt()
+	var curID string
 	for {
-		halt()
 		a.mu.Lock()
 		on, d := a.st.Online, a.dev
 		a.mu.Unlock()
-		if on {
+		if d.ID != curID {
+			halt()
+			curID = d.ID
 			cctx, cancel := context.WithCancel(ctx)
 			stop, done = cancel, make(chan struct{})
 			c := &hub.Client{
 				Dev:    d,
 				OnOpen: a.openForPeer,
-				OnState: func(online bool) {
-					a.update(func(s *State) {
-						if online {
-							s.Hub, s.HubMsg = "online", "Çevrimiçi"
-						} else if cctx.Err() == nil {
-							s.Hub, s.HubMsg = "connecting", "Sunucuya yeniden bağlanılıyor…"
-						}
-					})
+				Hello: func() (bool, []string) {
+					return a.isOnline(), a.peers.ids()
+				},
+				OnPresence: a.peers.setPresence,
+				OnState: func(connected bool) {
+					a.mu.Lock()
+					a.hubConnected = connected
+					a.mu.Unlock()
+					a.refreshHubState()
 				},
 			}
+			a.mu.Lock()
+			a.hubc = c
+			a.mu.Unlock()
 			go func(d chan struct{}) {
 				c.Run(cctx)
 				close(d)
 			}(done)
 		} else {
-			a.update(func(s *State) { s.Hub, s.HubMsg = "offline", "Bağlantılara kapalı" })
+			a.mu.Lock()
+			c := a.hubc
+			a.mu.Unlock()
+			if c != nil {
+				c.SetAvailable(on)
+			}
 		}
+		a.refreshHubState()
 		select {
 		case <-ctx.Done():
 			return
 		case <-a.onlineCh:
 		}
+	}
+}
+
+// refreshHubState, sunucu bağlantısı ve "açık/kapalı" durumundan arayüz metnini üretir.
+func (a *App) refreshHubState() {
+	a.update(func(s *State) {
+		switch {
+		case !a.hubConnected:
+			if s.Hub != "error" {
+				s.Hub, s.HubMsg = "connecting", "Sunucuya bağlanılıyor…"
+			}
+		case !s.Online:
+			s.Hub, s.HubMsg = "offline", "Bağlantılara kapalı"
+		default:
+			s.Hub, s.HubMsg = "online", "Çevrimiçi"
+		}
+	})
+}
+
+// watchPeers, kayıtlı cihaz listesi değişince sunucuya yeni izleme listesini bildirir.
+func (a *App) watchPeers() {
+	a.mu.Lock()
+	c := a.hubc
+	a.mu.Unlock()
+	if c != nil {
+		c.Watch(a.peers.ids())
 	}
 }
 
@@ -189,8 +230,28 @@ type peerStore struct {
 	path  string
 	peers []Peer
 
-	statAt time.Time
-	stat   map[string]bool
+	presence map[string]bool // sunucunun bildirdiği çevrimiçi durumu
+}
+
+func (p *peerStore) ids() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([]string, 0, len(p.peers))
+	for _, x := range p.peers {
+		out = append(out, x.ID)
+	}
+	return out
+}
+
+func (p *peerStore) setPresence(s map[string]bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.presence == nil {
+		p.presence = map[string]bool{}
+	}
+	for id, on := range s {
+		p.presence[id] = on
+	}
 }
 
 func (p *peerStore) load(dataDir string) {
@@ -217,44 +278,35 @@ func (p *peerStore) find(id string) *Peer {
 }
 
 // touch, cihazı listeye ekler (yoksa) ve son bağlantı zamanını günceller.
-func (p *peerStore) touch(id string) {
+// Liste yeni bir cihaz eklendiyse true döner.
+func (p *peerStore) touch(id string) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	added := false
 	if x := p.find(id); x != nil {
 		x.Last = time.Now().UnixMilli()
 	} else {
 		p.peers = append(p.peers, Peer{ID: id, Last: time.Now().UnixMilli()})
+		added = true
 	}
 	p.saveLocked()
+	return added
 }
 
 func cleanPeerID(s string) string { return hub.NormalizeID(s) }
 
 func (a *App) handlePeers(w http.ResponseWriter, r *http.Request) {
+	// Yalnızca yerel bilgi: çevrimiçi durumu sunucu bağlantısı üzerinden zaten gelir,
+	// burada sunucuya istek atılmaz (arayüz bu ucu sık sık okuyabilir).
 	p := &a.peers
 	p.mu.Lock()
 	list := make([]Peer, len(p.peers))
 	copy(list, p.peers)
-	fresh := time.Since(p.statAt) < 4*time.Second
-	stat := p.stat
-	p.mu.Unlock()
-
-	if !fresh && a.opts.Server != "" && len(list) > 0 {
-		ids := make([]string, 0, len(list))
-		for _, x := range list {
-			ids = append(ids, x.ID)
-		}
-		ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
-		if s, err := hub.Status(ctx, a.opts.Server, ids); err == nil {
-			stat = s
-			p.mu.Lock()
-			p.stat, p.statAt = s, time.Now()
-			p.mu.Unlock()
-		}
-		cancel()
-	}
 	for i := range list {
-		list[i].Online = stat[list[i].ID]
+		list[i].Online = p.presence[list[i].ID]
+	}
+	p.mu.Unlock()
+	for i := range list {
 		list[i].Open = a.viewers.isOpen(list[i].ID)
 	}
 	// Favoriler önce, sonra en son bağlanılan.
@@ -304,7 +356,6 @@ func (a *App) handlePeerSave(w http.ResponseWriter, r *http.Request) {
 			}
 			p.peers = append(p.peers, Peer{ID: id})
 			x = &p.peers[len(p.peers)-1]
-			p.statAt = time.Time{} // yeni cihazın durumu hemen sorulsun
 		}
 		if body.Name != nil {
 			x.Name = cleanLabel(*body.Name)
@@ -314,6 +365,7 @@ func (a *App) handlePeerSave(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	p.saveLocked()
+	go a.watchPeers()
 	writeOK(w)
 }
 
@@ -362,7 +414,9 @@ func (a *App) handleResolve(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-	a.peers.touch(id)
+	if a.peers.touch(id) {
+		go a.watchPeers()
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"url": url})
 }
