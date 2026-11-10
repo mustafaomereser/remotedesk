@@ -45,11 +45,10 @@
       <label class="check"><input type="checkbox" id="concurrent"> Aynı anda kullanım <span class="tag">deneysel</span></label>
       <details class="explain">
         <summary>Bu ne yapar?</summary>
-        <p>Kapalıyken: sen fareyi veya klavyeyi kullandığın anda bağlanan kişinin girişi <b>1 saniye bekletilir</b>, imleç için kavga etmezsiniz.</p>
-        <p>Açıkken: sen kullanırken bağlanan kişi <b>simülasyon moduna</b> geçer; senin imlecine ve odağına dokunmadan, tıkladığı pencereye doğrudan komut gönderir. Ekranda onun adı işlem yaptığı yerde görünür.</p>
-        <p><b>Çalışır:</b> klasik uygulamalarda tıklama ve çift tıklama, yazı yazma, Enter / Backspace / ok tuşları, kaydırma (Not Defteri, Gezgin, ayar pencereleri, iletişim kutuları; Mac'te standart düğme ve metin kutuları).</p>
-        <p><b>Çalışmaz:</b> Chrome / Edge / Safari ve Electron uygulamaları (VS Code, Discord, Slack, Spotify…), kısayollar (Ctrl+C, Cmd+V…), sürükle-bırak, sağ tık ve açılır menüler, oyunlar, yönetici olarak çalışan programlar. Mac'te arka plandaki pencereler ilk tıklamayı yok sayabilir.</p>
-        <p>Sen 1 saniye boyunca hiçbir şeye dokunmazsan bağlanan kişi otomatik olarak normal kontrole döner.</p>
+        <p><b>Kapalıyken:</b> tek, ortak imleç vardır. Bağlanan kişi imleci oynatırken yanında adı görünür. Sen fareye veya klavyeye dokunduğun anda onun girişi <b>1 saniye bekletilir</b>; imleç için kavga etmezsiniz.</p>
+        <p><b>Açıkken:</b> senin imlecin <b>hiç kıpırdamaz</b>. Bağlanan kişi ekranda adıyla birlikte kendi <b>hayalet imleciyle</b> çalışır; tıkladığı pencereye doğrudan komut gönderilir. İkiniz aynı anda kullanabilirsiniz.</p>
+        <p><b>Hayalet imleçle çalışanlar:</b> klasik uygulamalarda tıklama ve çift tıklama, yazı yazma, Enter / Backspace / ok tuşları, kaydırma (Not Defteri, Gezgin, ayar pencereleri, iletişim kutuları; Mac'te standart düğme ve metin kutuları).</p>
+        <p><b>Çalışmayanlar:</b> Chrome / Edge / Safari ve Electron uygulamaları (VS Code, Discord, Slack, Spotify…), kısayollar (Ctrl+C, Cmd+V…), sürükle-bırak, sağ tık ve açılır menüler, oyunlar, yönetici olarak çalışan programlar. Mac'te arka plandaki pencereler ilk tıklamayı yok sayabilir. Bunlar gerekiyorsa bu ayarı kapatın.</p>
       </details>
 
       <div id="sessionBox" class="session hidden">

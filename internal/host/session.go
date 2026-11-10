@@ -132,10 +132,10 @@ func (s *session) readLoop(ctx context.Context) {
 			switch s.route(ctx, false) {
 			case routeNormal:
 				s.in.Move(m.X, m.Y)
-				s.label(m.X, m.Y)
+				s.label(m.X, m.Y, false)
 			case routeSim:
 				s.in.BgMove(m.X, m.Y)
-				s.label(m.X, m.Y)
+				s.label(m.X, m.Y, true)
 			}
 		case "mb":
 			// Normal yoldan basılan düğme normal yoldan bırakılmalı (takılı kalmasın).
@@ -146,10 +146,10 @@ func (s *session) readLoop(ctx context.Context) {
 			switch s.route(ctx, !m.D) {
 			case routeNormal:
 				s.in.Button(m.B, m.D, m.X, m.Y)
-				s.label(m.X, m.Y)
+				s.label(m.X, m.Y, false)
 			case routeSim:
 				s.in.BgButton(m.B, m.D, m.X, m.Y)
-				s.label(m.X, m.Y)
+				s.label(m.X, m.Y, true)
 			}
 		case "wh":
 			switch s.route(ctx, false) {
@@ -214,15 +214,13 @@ const localPriority = time.Second
 
 func (s *session) route(ctx context.Context, release bool) int {
 	r := routeNormal
-	if desktop.LocalActive(localPriority) {
-		switch {
-		case s.concurrent != nil && s.concurrent():
-			r = routeSim
-		case release:
-			r = routeNormal // bırakma olayları her zaman uygulanır
-		default:
-			r = routeDrop
-		}
+	switch {
+	case s.concurrent != nil && s.concurrent():
+		// Aynı anda kullanım: yerel kullanıcının imleci hiç oynamaz; uzaktaki kişi her zaman
+		// kendi hayalet imleciyle (simülasyon) çalışır.
+		r = routeSim
+	case desktop.LocalActive(localPriority) && !release:
+		r = routeDrop // yerel kullanıcıya öncelik; bırakma olayları her zaman uygulanır
 	}
 	// Mod değiştiğinde (veya beklerken saniyede bir) viewer'a bildir.
 	if r != s.lastRoute || (r == routeDrop && time.Since(s.lastBusy) > time.Second) {
@@ -233,10 +231,11 @@ func (s *session) route(ctx context.Context, release bool) int {
 	return r
 }
 
-// label, ad etiketini uzaktaki kişinin işlem yaptığı noktaya koyar.
-func (s *session) label(x, y int) {
+// label, ad etiketini uzaktaki kişinin işlem yaptığı noktaya koyar. ghost=true ise
+// (simülasyon) gerçek imleç orada olmadığı için yanında bir ok imleci de çizilir.
+func (s *session) label(x, y int, ghost bool) {
 	dx, dy := s.in.Desktop(x, y)
-	desktop.RemoteActivity(s.name, dx, dy)
+	desktop.RemoteActivity(s.name, dx, dy, ghost)
 }
 
 // clipboardLoop, bu bilgisayarın panosu değişince metni viewer'a gönderir.

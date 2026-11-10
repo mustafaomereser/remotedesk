@@ -23,6 +23,7 @@ var (
 	labelX     int
 	labelY     int
 	labelUntil time.Time
+	labelGhost bool
 	labelLoop  bool
 )
 
@@ -68,15 +69,21 @@ func abs(v int) int {
 	return v
 }
 
-// RemoteActivity, uzaktaki kişinin (x, y) noktasında işlem yaptığını bildirir;
-// ad etiketi orada 1,5 sn görünür kalır.
-func RemoteActivity(name string, x, y int) {
+// RemoteActivity, uzaktaki kişinin (x, y) noktasında işlem yaptığını bildirir; ad etiketi
+// orada görünür kalır (normal modda 1,5 sn). ghost=true: gerçek imleç orada değil
+// (simülasyon modu), etiketle birlikte bir "hayalet" ok imleci çizilir.
+func RemoteActivity(name string, x, y int, ghost bool) {
 	if name == "" {
 		return
 	}
 	mu.Lock()
-	labelName, labelX, labelY = name, x, y
-	labelUntil = time.Now().Add(1500 * time.Millisecond)
+	labelName, labelX, labelY, labelGhost = name, x, y, ghost
+	// Hayalet imleç, gerçek imleç gibi yerinde kalmalı; normal etiket kısa süre sonra kaybolur.
+	if ghost {
+		labelUntil = time.Now().Add(30 * time.Second)
+	} else {
+		labelUntil = time.Now().Add(1500 * time.Millisecond)
+	}
 	start := !labelLoop
 	labelLoop = true
 	mu.Unlock()
@@ -97,9 +104,10 @@ func runLabel() {
 	defer t.Stop()
 	var shownName string
 	var sx, sy int
+	var sg bool
 	for range t.C {
 		mu.Lock()
-		name, x, y, until := labelName, labelX, labelY, labelUntil
+		name, x, y, ghost, until := labelName, labelX, labelY, labelGhost, labelUntil
 		if time.Now().After(until) {
 			labelLoop = false
 			mu.Unlock()
@@ -107,9 +115,9 @@ func runLabel() {
 			return
 		}
 		mu.Unlock()
-		if name != shownName || x != sx || y != sy {
-			showLabel(name, x, y)
-			shownName, sx, sy = name, x, y
+		if name != shownName || x != sx || y != sy || ghost != sg {
+			showLabel(name, x, y, ghost)
+			shownName, sx, sy, sg = name, x, y, ghost
 		}
 	}
 }

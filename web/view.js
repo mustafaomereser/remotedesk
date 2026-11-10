@@ -121,9 +121,9 @@ function onMessage(ev) {
           b.className = 'badge';
           b.title = 'Karşı taraf fareyi/klavyeyi bıraktıktan 1 sn sonra kontrol sana döner.';
         } else if (m.mode === 'sim') {
-          b.textContent = 'Simülasyon modu · sınırlı';
+          b.textContent = 'Aynı anda kullanım · hayalet imleç';
           b.className = 'badge sim';
-          b.title = 'Karşı taraf kullanırken imleci oynatmadan, tıkladığın pencereye doğrudan komut gönderiliyor. ' +
+          b.title = 'Karşı tarafın imleci oynamıyor; senin kendi (hayalet) imlecin var ve tıkladığın pencereye doğrudan komut gönderiliyor. ' +
             'Klasik uygulamalarda tıklama ve yazı çalışır; tarayıcılar, Electron uygulamaları, kısayollar ve sürükle-bırak çalışmaz.';
         } else {
           b.className = 'badge hidden';

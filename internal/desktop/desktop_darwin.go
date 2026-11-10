@@ -45,6 +45,7 @@ var (
 	msgColor   func(id, sel uintptr, r, g, b, a float64) uintptr
 	msgInitWin func(id, sel uintptr, r cgRect, style, backing uint, deferFlag bool) uintptr
 	msgSetRect func(id, sel uintptr, r cgRect, display bool) uintptr
+	msgFrame   func(id, sel uintptr, r cgRect) uintptr // initWithFrame: / setFrame:
 	msgSize    func(id, sel uintptr) cgSize
 )
 
@@ -127,7 +128,7 @@ func setupApp() uintptr {
 	if err != nil {
 		return 0
 	}
-	for _, fn := range []any{&msgID, &msgID1, &msgBool, &msgInt, &msgFloat, &msgColor, &msgInitWin, &msgSetRect, &msgSize} {
+	for _, fn := range []any{&msgID, &msgID1, &msgBool, &msgInt, &msgFloat, &msgColor, &msgInitWin, &msgSetRect, &msgFrame, &msgSize} {
 		purego.RegisterFunc(fn, send)
 	}
 
@@ -181,7 +182,11 @@ func nsString(s string) uintptr {
 
 var (
 	lblWin   uintptr
+	lblView  uintptr
 	lblField uintptr
+	lblArrow uintptr
+	arrowW   float64
+	arrowH   float64
 	lblName  string
 )
 
@@ -193,30 +198,43 @@ func ensureLabelWindow() bool {
 		borderless = 0
 		buffered   = 2
 	)
+	frame := cgRect{Size: cgSize{160, 50}}
 	w := msgID(class("NSWindow"), sel("alloc"))
-	w = msgInitWin(w, sel("initWithContentRect:styleMask:backing:defer:"), cgRect{Size: cgSize{120, 22}}, borderless, buffered, false)
+	w = msgInitWin(w, sel("initWithContentRect:styleMask:backing:defer:"), frame, borderless, buffered, false)
 	if w == 0 {
 		return false
 	}
 	msgBool(w, sel("setOpaque:"), false)
-	msgID1(w, sel("setBackgroundColor:"), msgColor(class("NSColor"), sel("colorWithSRGBRed:green:blue:alpha:"), 0.937, 0.294, 0.247, 0.95))
+	msgID1(w, sel("setBackgroundColor:"), msgID(class("NSColor"), sel("clearColor")))
 	msgInt(w, sel("setLevel:"), 1000) // NSScreenSaverWindowLevel: her şeyin üstünde
 	msgBool(w, sel("setIgnoresMouseEvents:"), true)
-	msgBool(w, sel("setHasShadow:"), true)
+	msgBool(w, sel("setHasShadow:"), false)
 	msgBool(w, sel("setReleasedWhenClosed:"), false)
-	// Tüm masaüstlerinde + tam ekran uygulamaların üstünde
-	msgInt(w, sel("setCollectionBehavior:"), 1|16|256)
+	msgInt(w, sel("setCollectionBehavior:"), 1|16|256) // tüm masaüstleri + tam ekran
+
+	view := msgFrame(msgID(class("NSView"), sel("alloc")), sel("initWithFrame:"), frame)
+	msgID1(w, sel("setContentView:"), view)
+
+	// Hayalet imleç: sistemin ok imlecinin resmi
+	img := msgID(msgID(class("NSCursor"), sel("arrowCursor")), sel("image"))
+	sz := msgSize(img, sel("size"))
+	arrowW, arrowH = sz.W, sz.H
+	arrow := msgID1(class("NSImageView"), sel("imageViewWithImage:"), img)
+	msgID1(view, sel("addSubview:"), arrow)
 
 	f := msgID1(class("NSTextField"), sel("labelWithString:"), nsString(""))
 	msgID1(f, sel("setTextColor:"), msgID(class("NSColor"), sel("whiteColor")))
 	msgID1(f, sel("setFont:"), msgFloat(class("NSFont"), sel("boldSystemFontOfSize:"), 12))
 	msgInt(f, sel("setAlignment:"), 2) // NSTextAlignmentCenter (macOS)
-	msgID1(w, sel("setContentView:"), f)
-	lblWin, lblField = w, f
+	msgBool(f, sel("setDrawsBackground:"), true)
+	msgID1(f, sel("setBackgroundColor:"), msgColor(class("NSColor"), sel("colorWithSRGBRed:green:blue:alpha:"), 0.937, 0.294, 0.247, 0.95))
+	msgID1(view, sel("addSubview:"), f)
+
+	lblWin, lblView, lblField, lblArrow = w, view, f, arrow
 	return true
 }
 
-func showLabel(name string, x, y int) {
+func showLabel(name string, x, y int, ghost bool) {
 	loadCG()
 	onMain(func() {
 		if !ensureLabelWindow() {
@@ -226,15 +244,31 @@ func showLabel(name string, x, y int) {
 			msgID1(lblField, sel("setStringValue:"), nsString(name))
 			lblName = name
 		}
-		sz := msgSize(lblField, sel("fittingSize"))
-		w, h := sz.W+16, sz.H+6
-		// Cocoa'da orijin ana ekranın sol altıdır; bizim koordinatlarımız sol üstten.
+		ts := msgSize(lblField, sel("fittingSize"))
+		lw, lh := ts.W+20, ts.H+4 // yazı kesilmesin diye pay
+
+		// Pencere içi yerleşim (Cocoa'da orijin sol alt)
+		var W, H, left, top float64
+		if ghost {
+			const lx, ly = 10, 20 // ad kutusu, okun ucunun sağ altında
+			W = max(arrowW, lx+lw)
+			H = max(arrowH, ly+lh)
+			msgFrame(lblArrow, sel("setFrame:"), cgRect{Origin: cgPoint{0, H - arrowH}, Size: cgSize{arrowW, arrowH}})
+			msgFrame(lblField, sel("setFrame:"), cgRect{Origin: cgPoint{lx, H - ly - lh}, Size: cgSize{lw, lh}})
+			left, top = float64(x), float64(y) // okun ucu = işlem noktası
+		} else {
+			W, H = lw, lh
+			msgFrame(lblField, sel("setFrame:"), cgRect{Size: cgSize{lw, lh}})
+			left, top = float64(x)+12, float64(y)+22 // gerçek imlecin sağ altı
+		}
+		msgBool(lblArrow, sel("setHidden:"), !ghost)
+
+		// Bizim koordinatlarımız ana ekranın sol üstünden; Cocoa'nınki sol altından.
 		mainH := 0.0
 		if cgDisplayBounds != nil && cgMainDisplayID != nil {
 			mainH = cgDisplayBounds(cgMainDisplayID()).Size.H
 		}
-		top := float64(y) + 22
-		r := cgRect{Origin: cgPoint{float64(x) + 12, mainH - top - h}, Size: cgSize{w, h}}
+		r := cgRect{Origin: cgPoint{left, mainH - top - H}, Size: cgSize{W, H}}
 		msgSetRect(lblWin, sel("setFrame:display:"), r, true)
 		msgID1(lblWin, sel("orderFrontRegardless"), 0)
 	})

@@ -37,6 +37,8 @@ var (
 	procReleaseDC                  = user32.NewProc("ReleaseDC")
 	procSetLayeredWindowAttributes = user32.NewProc("SetLayeredWindowAttributes")
 	procGetDpiForSystem            = user32.NewProc("GetDpiForSystem")
+	procPolygon                    = gdi32.NewProc("Polygon")
+	procCreatePen                  = gdi32.NewProc("CreatePen")
 
 	procCreateSolidBrush      = gdi32.NewProc("CreateSolidBrush")
 	procCreateFontW           = gdi32.NewProc("CreateFontW")
@@ -87,7 +89,14 @@ var (
 	ovText  []uint16
 	ovFont  uintptr
 	ovBrush uintptr
+	ovKey   uintptr // saydam renk (macenta) fırçası
+	ovWhite uintptr
+	ovPen   uintptr
+	ovGhost bool // hayalet ok imleci çizilsin mi
+	ovScale float64
 )
+
+const colorKey = 0x00FF00FF // bu renkteki pikseller tamamen saydam
 
 type wndClassEx struct {
 	Size       uint32
@@ -169,7 +178,7 @@ func createOverlay() {
 	if h == 0 {
 		return
 	}
-	procSetLayeredWindowAttributes.Call(h, 0, 235, 2) // LWA_ALPHA
+	procSetLayeredWindowAttributes.Call(h, colorKey, 240, 1|2) // LWA_COLORKEY | LWA_ALPHA
 
 	dpi := uintptr(96)
 	if procGetDpiForSystem.Find() == nil {
@@ -181,6 +190,10 @@ func createOverlay() {
 	height := -int32(10 * dpi / 72) // 10pt
 	ovFont, _, _ = procCreateFontW.Call(uintptr(height), 0, 0, 0, 700, 0, 0, 0, 1, 0, 0, 5, 0, uintptr(unsafe.Pointer(face)))
 	ovBrush, _, _ = procCreateSolidBrush.Call(0x003F4BEF) // #EF4B3F (BGR)
+	ovKey, _, _ = procCreateSolidBrush.Call(colorKey)
+	ovWhite, _, _ = procCreateSolidBrush.Call(0x00FFFFFF)
+	ovPen, _, _ = procCreatePen.Call(0, uintptr(max(1, dpi/96)), 0x00000000)
+	ovScale = float64(dpi) / 96
 	ovHwnd = h
 }
 
@@ -191,6 +204,19 @@ func overlayProc(hwnd, m, wp, lp uintptr) uintptr {
 		hdc, _, _ := procBeginPaint.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
 		var rc rect
 		procGetClientRect.Call(hwnd, uintptr(unsafe.Pointer(&rc)))
+		ovMu.Lock()
+		ghost := ovGhost
+		ovMu.Unlock()
+		if ghost {
+			// Saydam zemin + beyaz ok (siyah kenarlı) + altında kırmızı ad kutusu
+			procFillRect.Call(hdc, uintptr(unsafe.Pointer(&rc)), ovKey)
+			pts := arrowPoints()
+			procSelectObject.Call(hdc, ovPen)
+			procSelectObject.Call(hdc, ovWhite)
+			procPolygon.Call(hdc, uintptr(unsafe.Pointer(&pts[0])), uintptr(len(pts)))
+			lx, ly := ghostLabelOffset()
+			rc.L, rc.T = lx, ly
+		}
 		procFillRect.Call(hdc, uintptr(unsafe.Pointer(&rc)), ovBrush)
 		procSelectObject.Call(hdc, ovFont)
 		procSetBkMode.Call(hdc, 1) // TRANSPARENT
@@ -206,6 +232,13 @@ func overlayProc(hwnd, m, wp, lp uintptr) uintptr {
 	case wmAppShow:
 		x, y := int32(int64(wp)), int32(int64(lp))
 		w, h := textSize(hwnd)
+		ovMu.Lock()
+		ghost := ovGhost
+		ovMu.Unlock()
+		if ghost {
+			lx, ly := ghostLabelOffset()
+			w, h = lx+w, ly+h
+		}
 		const hwndTopmost = ^uintptr(0)                                                                     // -1
 		procSetWindowPos.Call(hwnd, hwndTopmost, uintptr(x), uintptr(y), uintptr(w), uintptr(h), 0x10|0x40) // NOACTIVATE|SHOWWINDOW
 		procInvalidateRect.Call(hwnd, 0, 1)
@@ -231,16 +264,36 @@ func textSize(hwnd uintptr) (int32, int32) {
 	return sz.CX + sz.CY, sz.CY + sz.CY/2 // yatay/dikey boşluk yazı yüksekliğiyle orantılı
 }
 
-func showLabel(name string, x, y int) {
+func showLabel(name string, x, y int, ghost bool) {
 	if !ensureOverlay() {
 		return
 	}
 	t, _ := windows.UTF16FromString(name)
 	ovMu.Lock()
-	ovText = t
+	ovText, ovGhost = t, ghost
 	ovMu.Unlock()
-	// İmlecin sağ altı (imleç ucu kutunun üstünde kalsın)
+	if ghost {
+		// Pencerenin sol üstü = okun ucu = uzaktaki kişinin işlem noktası
+		procPostMessageW.Call(ovHwnd, wmAppShow, uintptr(int64(x)), uintptr(int64(y)))
+		return
+	}
+	// Gerçek imlecin sağ altı (imleç ucu kutunun üstünde kalsın)
 	procPostMessageW.Call(ovHwnd, wmAppShow, uintptr(int64(x+14)), uintptr(int64(y+22)))
+}
+
+// arrowPoints, standart ok imleci şekli (96 DPI'da ~12x19 px), ekran ölçeğine göre.
+func arrowPoints() []point {
+	base := [][2]float64{{0, 0}, {0, 17}, {4, 13}, {7, 19}, {10, 18}, {7, 12}, {12, 12}}
+	pts := make([]point, len(base))
+	for i, p := range base {
+		pts[i] = point{int32(p[0]*ovScale + 0.5), int32(p[1]*ovScale + 0.5)}
+	}
+	return pts
+}
+
+// ghostLabelOffset, ad kutusunun okun ucuna göre konumu (okun sağ altı).
+func ghostLabelOffset() (int32, int32) {
+	return int32(10 * ovScale), int32(20 * ovScale)
 }
 
 func hideLabel() {
