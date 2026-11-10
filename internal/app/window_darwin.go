@@ -42,6 +42,7 @@ func openAppWindow(url, profileDir string) (*exec.Cmd, error) {
 		"--user-data-dir="+profileDir,
 		"--no-first-run",
 		"--no-default-browser-check",
+		"--disable-features=Translate",
 		"--window-size=980,700",
 	)
 	if err := cmd.Start(); err != nil {
