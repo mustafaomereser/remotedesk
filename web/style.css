@@ -114,6 +114,7 @@ button.wide { margin-top: 14px; padding: 11px; }
 .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--warn); flex: none; }
 .dot.ok { background: var(--ok); box-shadow: 0 0 0 3px rgba(52, 199, 123, .15); }
 .dot.err { background: var(--err); }
+.dot.off { background: #6b7280; }
 .dot.busy { animation: pulse 1.2s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: .35; } }
 

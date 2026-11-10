@@ -35,6 +35,7 @@ var (
 	mainCallback       uintptr
 	mainReady          bool
 	msgSendAddr        uintptr
+	mainReadyCh        = make(chan struct{})
 	mainJobs           = make(chan func(), 256)
 
 	// objc_msgSend'in kullandığımız imzaları (struct/float argümanları için tipli kayıt gerekir)
@@ -160,6 +161,7 @@ func setupApp() uintptr {
 	// Accessory: Dock'ta ikon yok; arayüz tarayıcı penceresinde.
 	msgInt(app, sel("setActivationPolicy:"), 1)
 	mainReady = true
+	close(mainReadyCh)
 	return app
 }
 

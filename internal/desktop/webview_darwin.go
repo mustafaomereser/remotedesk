@@ -63,12 +63,17 @@ func loadWebKit() bool {
 // OpenAppWindow, url'yi uygulamanın kendi penceresinde açar. Pencere kapanınca onClose çağrılır.
 // WebKit/AppKit kullanılamıyorsa false döner (çağıran tarayıcıya düşer).
 func OpenAppWindow(url, title string, onClose func()) bool {
-	if !mainReady {
+	// RunMain, AppKit'i ana iş parçacığında fn ile aynı anda hazırlar: hazır olmasını bekle.
+	select {
+	case <-mainReadyCh:
+	case <-time.After(5 * time.Second):
+		log.Printf("webview: AppKit hazır değil")
 		return false
 	}
 	res := make(chan bool, 1)
 	onMain(func() {
 		if !loadWebKit() {
+			log.Printf("webview: WebKit kullanılamıyor")
 			res <- false
 			return
 		}
@@ -89,6 +94,7 @@ func OpenAppWindow(url, title string, onClose func()) bool {
 	case ok := <-res:
 		return ok
 	case <-time.After(5 * time.Second):
+		log.Printf("webview: pencere zamanında açılamadı")
 		return false
 	}
 }

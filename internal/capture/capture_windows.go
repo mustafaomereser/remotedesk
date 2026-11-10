@@ -121,6 +121,8 @@ func Displays() ([]Display, error) {
 
 // Capturer tek bir goroutine'den kullanılmalıdır.
 type Capturer struct {
+	Full bool // Windows'ta kullanılmaz (her zaman fiziksel çözünürlük)
+
 	screenDC uintptr
 	memDC    uintptr
 	bmp      uintptr

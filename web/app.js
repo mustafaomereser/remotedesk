@@ -48,12 +48,17 @@ function connectEvents() {
 
 function render(s) {
   state = s;
-  $('myId').textContent = s.id || '—';
+  $('myId').textContent = s.id || (s.tunnel === 'off' ? 'Tünel kapalı' : '—');
+  const tb = $('tunBtn');
+  tb.classList.toggle('hidden', (s.tunnelMsg || '').startsWith('Yerel mod'));
+  tb.textContent = s.tunnel === 'off' ? 'Tüneli aç' : 'Tüneli kapat';
+  tb.classList.toggle('primary', s.tunnel === 'off');
+  $('idCopy').classList.toggle('hidden', !s.id);
   $('myPw').textContent = showPw ? s.password : '•'.repeat(s.password.length);
   $('pwShow').textContent = showPw ? 'Gizle' : 'Göster';
 
   const dot = $('tunDot');
-  dot.className = 'dot ' + (s.tunnel === 'on' ? 'ok' : s.tunnel === 'error' ? 'err' : 'busy');
+  dot.className = 'dot ' + (s.tunnel === 'on' ? 'ok' : s.tunnel === 'error' ? 'err' : s.tunnel === 'off' ? 'off' : 'busy');
   $('tunMsg').textContent = s.tunnelMsg;
   $('vidDot').className = 'dot ' + (s.video === 'on' ? 'ok' : s.video === 'error' ? 'err' : 'busy');
   $('vidMsg').textContent = s.videoMsg;
@@ -144,6 +149,7 @@ setInterval(() => {
 
 // ---- bu bilgisayar ----
 
+$('tunBtn').onclick = () => api('host/tunnel', { value: state.tunnel === 'off' }).catch((e) => toast(e.message));
 $('idCopy').onclick = () => copy(state && state.id, 'ID');
 $('pwCopy').onclick = () => copy(state && state.password, 'Şifre');
 $('pwShow').onclick = () => { showPw = !showPw; if (state) render(state); };

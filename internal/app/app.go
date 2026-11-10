@@ -99,6 +99,8 @@ type App struct {
 
 	quit     chan struct{}
 	quitOnce sync.Once
+
+	tunnelReq chan bool // arayüzden "Tüneli aç / kapat"
 }
 
 func New(o Options) *App {
@@ -107,10 +109,11 @@ func New(o Options) *App {
 		pw = genPassword()
 	}
 	a := &App{
-		opts:    o,
-		subs:    map[chan []byte]struct{}{},
-		pending: map[string]chan bool{},
-		quit:    make(chan struct{}),
+		tunnelReq: make(chan bool, 4),
+		opts:      o,
+		subs:      map[chan []byte]struct{}{},
+		pending:   map[string]chan bool{},
+		quit:      make(chan struct{}),
 		st: State{
 			Tunnel: "starting", TunnelMsg: "Başlatılıyor…",
 			Video: "starting", VideoMsg: "H.264 hazırlanıyor…",
@@ -386,6 +389,58 @@ func (a *App) tunnelLoop(ctx context.Context) {
 		<-ctx.Done()
 		return
 	}
+	// Pencereli kullanımda tünel kullanıcı isteyince açılır; -headless'ta hemen.
+	var stop context.CancelFunc
+	var done chan struct{}
+	start := func() {
+		if stop != nil {
+			return
+		}
+		tctx, cancel := context.WithCancel(ctx)
+		stop, done = cancel, make(chan struct{})
+		go func(d chan struct{}) {
+			a.runTunnel(tctx)
+			close(d)
+		}(done)
+	}
+	halt := func() {
+		if stop == nil {
+			return
+		}
+		stop()
+		<-done
+		stop = nil
+		a.host.Kick()
+	}
+	setOff := func() {
+		a.update(func(s *State) {
+			s.Tunnel, s.ID, s.TunnelMsg = "off", "", "Tünel kapalı · bağlantı almak için Tüneli aç"
+		})
+	}
+	if a.opts.Headless {
+		start()
+	} else {
+		setOff()
+	}
+	for {
+		select {
+		case on := <-a.tunnelReq:
+			if on {
+				start()
+			} else if stop != nil {
+				halt()
+				setOff()
+			}
+		case <-ctx.Done():
+			if done != nil {
+				<-done
+			}
+			return
+		}
+	}
+}
+
+func (a *App) runTunnel(ctx context.Context) {
 	cfHome := filepath.Join(a.opts.DataDir, "cloudflared-home")
 	for ctx.Err() == nil {
 		bin := tunnel.Find(a.opts.DataDir)
@@ -469,6 +524,20 @@ func (a *App) uiHandler() http.Handler {
 			return
 		}
 		a.update(func(s *State) { s.Concurrent = body.Value })
+		writeOK(w)
+	})
+	mux.HandleFunc("POST /api/host/tunnel", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Value bool `json:"value"`
+		}
+		if err := readJSON(r, &body); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		select {
+		case a.tunnelReq <- body.Value:
+		default:
+		}
 		writeOK(w)
 	})
 	mux.HandleFunc("GET /api/me", func(w http.ResponseWriter, r *http.Request) {

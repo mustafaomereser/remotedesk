@@ -422,6 +422,7 @@ func (s *session) setMapping(d capture.Display, w, h int) {
 // görüntüyü yarıya indirir: 4 kat daha az piksel yakalama sonrası her adımı hızlandırır.
 func (s *session) grab(d capture.Display) (*capture.Frame, time.Duration, error) {
 	t := time.Now()
+	s.cp.Full = s.quality.Load() >= 85
 	f, err := s.cp.Capture(d)
 	if err != nil {
 		return nil, 0, err

@@ -109,6 +109,12 @@ func Displays() ([]Display, error) {
 }
 
 type Capturer struct {
+	// Full: Retina ekranı tam çözünürlükte yakala (yoksa point boyutunda).
+	Full bool
+
+	stream       *displayStream
+	streamBroken map[int]bool
+
 	buf   []byte
 	data  uintptr // son karenin CFData'sı; Pix doğrudan onu gösterir (kopya yok)
 	frame Frame
@@ -125,12 +131,15 @@ func New() (*Capturer, error) {
 	if err := load(); err != nil {
 		return nil, err
 	}
-	return &Capturer{}, nil
+	return &Capturer{streamBroken: map[int]bool{}}, nil
 }
 
 // Capture monitörü fiziksel piksel çözünürlüğünde yakalar.
 // Not: macOS'ta imleç görüntüye dahil edilmez.
 func (c *Capturer) Capture(d Display) (*Frame, error) {
+	if f, ok := c.streamCapture(d); ok {
+		return f, nil
+	}
 	img := cgDisplayCreateImage(uint32(d.ID))
 	if img == 0 {
 		return nil, errors.New("ekran yakalanamadı (Ekran Kaydı izni verildi mi?)")
@@ -186,4 +195,7 @@ func (c *Capturer) Capture(d Display) (*Frame, error) {
 	return &c.frame, nil
 }
 
-func (c *Capturer) Close() { c.releaseData() }
+func (c *Capturer) Close() {
+	c.stopStream()
+	c.releaseData()
+}
