@@ -13,9 +13,14 @@ package main
 //     (kelime-kelime-kelime) alınır ve karşı tarafa elle verilir.
 //   - Cihaz listesi ve çevrimiçi durumu çalışmaz.
 //
-// Kendi sunucunu kurmak için: cd server && npx wrangler deploy, çıkan adresi buraya yaz.
+// Adres repoda tutulmaz: derleme sırasında exe'ye eklenir. Kaynak sırasıyla:
+//   1. RD_HUB_SERVER ortam değişkeni
+//   2. proje kökündeki .hubserver dosyası (git'e girmez, .gitignore'da)
+// scripts/build-release.sh ve build.ps1 bunu -ldflags "-X main.HubServer=..." ile yapar.
+// Elle derlerken: go build -ldflags "-X main.HubServer=$(cat .hubserver)" .
+// Kendi sunucunu kurmak için: cd server && npx wrangler deploy, çıkan adresi .hubserver'a yaz.
 // Çalışırken değiştirmek için: RemoteDesk -server https://... (boş vermek: -server "").
-const HubServer = ""
+var HubServer = ""
 
 // UpdateRepo, güncellemelerin denetlendiği GitHub deposudur ("sahip/ad").
 // Uygulama açılınca ve 6 saatte bir son sürüme bakar; yeni sürüm varsa arayüzde

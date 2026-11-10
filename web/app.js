@@ -210,7 +210,7 @@ $('kick').onclick = () => api('host/kick');
 
 // ---- ayarlar ----
 
-const SWITCHES = ['online', 'onlineAtStart', 'autoAccept', 'allowBrowser', 'allowControl', 'allowClipboard', 'concurrent'];
+const SWITCHES = ['online', 'onlineAtStart', 'allowBrowser', 'allowControl', 'allowClipboard', 'concurrent'];
 for (const k of SWITCHES) {
   $(k).onchange = (e) => api('settings', { [k]: e.target.checked }).catch((err) => { toast(err.message); if (state) render(state); });
 }
@@ -401,6 +401,7 @@ $('connectForm').onsubmit = (e) => {
   if (w) { w.focus(); return; }
   startConnection(id, pw);
   $('remotePw').value = '';
+  syncConnectLabel();
 };
 
 // ---- kayıtlı cihazlar ----
@@ -574,3 +575,10 @@ $('hReject').onclick = () => {
     hcall.handle(m);
   };
 })();
+
+// Şifre doluysa doğrudan bağlanılır, boşsa istek gider: düğme metni buna göre.
+function syncConnectLabel() {
+  $('connectBtn').textContent = $('remotePw').value ? 'Bağlan' : 'Bağlantı isteği gönder';
+}
+$('remotePw').addEventListener('input', syncConnectLabel);
+syncConnectLabel();

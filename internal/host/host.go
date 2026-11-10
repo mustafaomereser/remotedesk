@@ -32,7 +32,8 @@ type Server struct {
 	// OnRTC, bağlanan kişiden gelen sesli görüşme sinyalini (WebRTC) yerel arayüze iletir.
 	OnRTC func(msg json.RawMessage)
 	WebFS fs.FS
-	// Confirm, kullanıcıdan bağlantı onayı ister (nil ise otomatik kabul).
+	// Confirm, şifresiz gelen bağlantı isteği için kullanıcıdan onay ister
+	// (nil ise şifresiz istek kabul edilmez).
 	Confirm func(ctx context.Context, remote, name string) bool
 	// OnSession, oturum başladığında/bittiğinde çağrılır.
 	OnSession func(remote, name string, active bool)
@@ -47,6 +48,19 @@ type Server struct {
 	fails     int
 	lockUntil time.Time
 	unauthed  int // henüz şifresini göndermemiş bağlantı sayısı
+	lastReq   time.Time
+}
+
+// allowRequest: şifresiz bağlantı isteklerini sınırlar (karşı tarafı onay pencereleriyle
+// boğmamak için en çok 5 saniyede bir).
+func (s *Server) allowRequest() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if time.Since(s.lastReq) < 5*time.Second {
+		return false
+	}
+	s.lastReq = time.Now()
+	return true
 }
 
 // maxUnauthed: aynı anda şifre aşamasında bekleyebilecek bağlantı sayısı. Tünel adresini
@@ -254,8 +268,14 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		s.leaveAuth()
 		return
 	}
-	ok, unattended, locked := s.tryAuth(m.Pw)
-	if !ok && !locked {
+	// Şifresiz bağlantı = istek: karşı tarafta "Kabul et / Reddet" çıkar.
+	// Şifreyle (tek kullanımlık ya da sabit) gelen doğrudan bağlanır.
+	request := m.Pw == ""
+	var ok, locked bool
+	if !request {
+		ok, _, locked = s.tryAuth(m.Pw)
+	}
+	if !request && !ok && !locked {
 		log.Printf("hatalı şifre denemesi: %s", remoteAddr(r))
 		time.Sleep(time.Second) // bu bağlantı şifre aşaması kotasını tutmaya devam eder
 	}
@@ -269,9 +289,19 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		sendErr(ctx, c, "Çok fazla hatalı deneme. Biraz sonra tekrar dene.")
 		return
 	}
-	if !ok {
+	if !request && !ok {
 		sendErr(ctx, c, "Şifre yanlış.")
 		return
+	}
+	if request {
+		if s.Confirm == nil {
+			sendErr(ctx, c, "Bu bilgisayar şifresiz bağlantı isteği kabul etmiyor. Şifreyle bağlan.")
+			return
+		}
+		if !s.allowRequest() {
+			sendErr(ctx, c, "Çok sık bağlantı isteği gönderildi. Biraz sonra tekrar dene.")
+			return
+		}
 	}
 
 	if !s.claim(cancel) {
@@ -280,7 +310,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 	defer s.release()
 
-	if s.Confirm != nil && !unattended {
+	if request {
 		wsjson.Write(ctx, c, map[string]string{"t": "wait"})
 		if !s.Confirm(ctx, remote, name) {
 			sendErr(ctx, c, "Bağlantı karşı tarafça reddedildi.")
@@ -306,8 +336,10 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		s.sess = nil
 		s.mu.Unlock()
 	}()
-	if unattended {
-		log.Printf("sabit şifreyle bağlanıldı (gözetimsiz erişim): %s", remote)
+	if request {
+		log.Printf("bağlantı isteği kabul edildi: %s", remote)
+	} else {
+		log.Printf("şifreyle bağlanıldı: %s", remote)
 	}
 	if m.V >= 10 && m.V <= 95 {
 		sess.quality.Store(int32(m.V))

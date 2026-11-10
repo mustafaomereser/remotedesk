@@ -18,6 +18,15 @@ APPLE_SIGN_DIR="${APPLE_SIGN_DIR:-$HOME/.agentic-signing/apple}"
 NOTARY_WAIT="${NOTARY_WAIT:-7200}"
 MAC_SIGN="${MAC_SIGN:-2}"
 LD="-s -w"
+# Buluşma sunucusu adresi repoda değil: ortam değişkeninden ya da yerel .hubserver dosyasından.
+HUB="${RD_HUB_SERVER:-$( [ -f .hubserver ] && tr -d ' 
+' < .hubserver )}"
+if [ -n "$HUB" ]; then
+  LD="$LD -X main.HubServer=$HUB"
+  echo "  buluşma sunucusu: ayarlı"
+else
+  echo "  UYARI: buluşma sunucusu yok (.hubserver / RD_HUB_SERVER): sunucusuz mod derleniyor" >&2
+fi
 
 [ -n "$VERSION" ] || { echo "HATA: main.go içinde appVersion bulunamadı" >&2; exit 1; }
 command -v rcodesign >/dev/null || { echo "HATA: rcodesign yok" >&2; exit 1; }

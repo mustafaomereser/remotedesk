@@ -2,3 +2,6 @@ dist/
 *.exe
 node_modules/
 .wrangler/
+
+# Buluşma sunucusunun adresi: yalnızca yerelde, derlemede exe içine eklenir (repoya girmez)
+.hubserver

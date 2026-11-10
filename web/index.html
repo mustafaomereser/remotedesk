@@ -30,7 +30,7 @@
     <section class="card">
       <div class="card-head">
         <h2>Bu bilgisayar</h2>
-        <p>Başka biri bağlanacaksa ona ID'yi ve şifreyi ver.</p>
+        <p>Başka biri bağlanmak isterse ona ID'yi ver. Şifreyi de verirsen onay beklemeden bağlanır.</p>
       </div>
 
       <div class="cred">
@@ -98,7 +98,7 @@
     <section class="card">
       <div class="card-head">
         <h2>Uzak bilgisayara bağlan</h2>
-        <p>Bağlanmak istediğin bilgisayarın ID'sini ve şifresini gir.</p>
+        <p>ID'yi gir. Şifreyi biliyorsan doğrudan bağlanırsın; boş bırakırsan karşı taraf isteğini onaylar.</p>
       </div>
       <form id="connectForm" class="form" autocomplete="off">
         <div class="field">
@@ -106,15 +106,15 @@
           <input id="remoteId" type="text" placeholder="123 456 789" spellcheck="false" required>
         </div>
         <div class="field">
-          <label for="remotePw">Şifre</label>
-          <input id="remotePw" type="password" required>
+          <label for="remotePw">Şifre <span class="opt">isteğe bağlı</span></label>
+          <input id="remotePw" type="password" placeholder="Boş bırakırsan bağlantı isteği gider" autocomplete="off">
         </div>
         <div class="field">
           <label for="myName">Adın</label>
           <input id="myName" type="text" maxlength="32" spellcheck="false" placeholder="Adın">
           <span class="hint">Karşı tarafta imlecinin yanında görünür.</span>
         </div>
-        <button class="primary block" type="submit">Bağlan</button>
+        <button class="primary block" type="submit" id="connectBtn">Bağlantı isteği gönder</button>
         <div id="connectErr" class="error-text"></div>
       </form>
       <div id="peers" class="peers"></div>
@@ -166,13 +166,6 @@
             </label>
             <label class="row">
               <span class="row-text">
-                <span class="row-title">Onay sormadan kabul et</span>
-                <span class="row-hint">Tek kullanımlık şifreyle gelen bağlantı da onay beklemeden başlar.</span>
-              </span>
-              <input type="checkbox" class="switch" id="autoAccept">
-            </label>
-            <label class="row">
-              <span class="row-text">
                 <span class="row-title">Tarayıcıdan erişime izin ver</span>
                 <span class="row-hint" id="browserHint">Uygulaması olmayan biri tarayıcıdan şifreyle bağlanabilir.</span>
               </span>
@@ -194,7 +187,7 @@
             <form class="row static col" id="fixedForm">
               <span class="row-text">
                 <span class="row-title" id="fixedState">Ayarlı değil</span>
-                <span class="row-hint">Bu şifreyle bağlanan kişi, sen bilgisayarın başında olmasan da onay beklemeden bağlanır. Tek kullanımlık şifre de çalışmaya devam eder. En az 8 karakter; şifre yalnızca özet olarak saklanır.</span>
+                <span class="row-hint">Değişmeyen bir şifre: bunu bilen kişi, sen bilgisayarın başında olmasan da onay beklemeden bağlanır. Tek kullanımlık şifre de çalışmaya devam eder. En az 8 karakter; yalnızca özeti saklanır.</span>
               </span>
               <div class="inline">
                 <input id="fixedInput" type="password" placeholder="Yeni sabit şifre" autocomplete="new-password" minlength="8">

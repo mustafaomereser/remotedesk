@@ -57,14 +57,14 @@
     <form id="webLogin" class="weblogin hidden" autocomplete="off">
       <div class="wl-card">
         <div class="brand"><span class="logo"></span>RemoteDesk</div>
-        <p class="wl-lead">Bu bilgisayara bağlanmak için şifreyi gir.</p>
+        <p class="wl-lead">Şifreyi biliyorsan gir; boş bırakırsan karşı taraf bağlantı isteğini onaylar.</p>
         <div class="field">
           <label for="wlName">Adın</label>
           <input id="wlName" type="text" maxlength="32" placeholder="Karşı tarafta görünür" spellcheck="false">
         </div>
         <div class="field">
-          <label for="wlPw">Şifre</label>
-          <input id="wlPw" type="password" required autocomplete="current-password">
+          <label for="wlPw">Şifre <span class="opt">isteğe bağlı</span></label>
+          <input id="wlPw" type="password" autocomplete="current-password">
         </div>
         <button class="primary block" type="submit">Bağlan</button>
         <div id="wlErr" class="error-text"></div>

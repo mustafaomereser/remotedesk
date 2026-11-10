@@ -337,14 +337,13 @@ func (a *App) onSession(remote, name string, active bool) {
 
 func (a *App) confirm(ctx context.Context, remote, name string) bool {
 	a.mu.Lock()
-	if a.set.AutoAccept {
-		a.mu.Unlock()
-		return true
-	}
 	if a.opts.Headless {
+		auto := a.set.AutoAccept
 		a.mu.Unlock()
-		log.Printf("%s reddedildi: headless modda -autoaccept gerekli", remote)
-		return false
+		if !auto {
+			log.Printf("%s isteği reddedildi: pencere yok (şifreyle bağlanılmalı)", remote)
+		}
+		return auto // -headless -autoaccept: test için şifresiz isteği de kabul et
 	}
 	id := randString(12, "abcdefghijklmnopqrstuvwxyz0123456789")
 	ch := make(chan bool, 1)

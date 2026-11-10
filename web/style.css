@@ -482,3 +482,4 @@ body.framed.fs .winctl { display: none; }
   body.framed .top .winctl { order: 2; margin-left: auto; }
   body.framed .top .top-status { order: 4; }
 }
+.opt { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--faint); margin-left: 4px; }

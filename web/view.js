@@ -178,7 +178,7 @@ function onMessage(ev) {
     try { m = JSON.parse(ev.data); } catch { return; }
     switch (m.t) {
       case 'wait':
-        showOverlay('Karşı tarafın bağlantıyı onaylaması bekleniyor…');
+        showOverlay('Bağlantı isteği gönderildi. Karşı tarafın kabul etmesi bekleniyor…');
         break;
       case 'init':
         canvas.width = m.w;
