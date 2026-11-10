@@ -21,11 +21,10 @@ import (
 )
 
 const (
-	maxFPS        = 30
+	maxFPS        = 60
 	maxClipBytes  = 1 << 20
 	maxVideoWidth = 2560
-	maxInflight   = 3  // viewer'ın henüz çizmediği en fazla H.264 karesi
-	refineFrames  = 12 // ekran durduktan sonra kaliteyi iyileştirmek için gönderilen ek kare
+	refineFrames  = 20 // ekran durduktan sonra kaliteyi iyileştirmek için gönderilen ek kare
 )
 
 var (
@@ -67,12 +66,13 @@ type session struct {
 	cur      int
 	lastEnum time.Time
 	mode     string
+	half     capture.Frame // Retina küçültme tamponu
 }
 
 func newSession(c *websocket.Conn, vi VideoInfo, wantH264 bool) *session {
 	s := &session{
 		c: c, in: input.New(), video: vi, wantH264: wantH264,
-		ack: make(chan struct{}, 1), vack: make(chan struct{}, 64), poke: make(chan struct{}, 1),
+		ack: make(chan struct{}, 64), vack: make(chan struct{}, 64), poke: make(chan struct{}, 1),
 	}
 	s.quality.Store(70)
 	s.wantDisplay.Store(-1)
@@ -343,10 +343,96 @@ func (s *session) setMapping(d capture.Display, w, h int) {
 	})
 }
 
+// grab, seçili monitörü yakalar. Retina ekranlarda (kalite "Kaliteli" değilse)
+// görüntüyü yarıya indirir: 4 kat daha az piksel yakalama sonrası her adımı hızlandırır.
+func (s *session) grab(d capture.Display) (*capture.Frame, time.Duration, error) {
+	t := time.Now()
+	f, err := s.cp.Capture(d)
+	if err != nil {
+		return nil, 0, err
+	}
+	if s.quality.Load() < 85 && f.W >= d.W*3/2 && f.H >= d.H*3/2 {
+		capture.Half(f, &s.half)
+		f = &s.half
+	}
+	return f, time.Since(t), nil
+}
+
+// grabbed, yakalayıcı goroutine'in ürettiği, sıkıştırılmış (Stride = W*4) bir karedir.
+type grabbed struct {
+	f   capture.Frame
+	dur time.Duration
+	err error
+}
+
+// startGrabber, ekranı ayrı bir goroutine'de maxFPS hızında yakalar. Böylece bir kare
+// işlenirken (karşılaştırma, kodlama, gönderme) bir sonraki yakalanır: hız, iki işin
+// toplamıyla değil yavaş olanıyla sınırlanır. Tüketici yetişemezse en eski kare atılır,
+// her zaman en yeni kare verilir. Kullanılan kare free'ye geri konmalıdır.
+// stop çağrıldığında goroutine'in bitmesi beklenir (Capturer'ı tek goroutine kullanır).
+func (s *session) startGrabber(ctx context.Context, d capture.Display) (frames <-chan *grabbed, free chan<- *grabbed, stop func()) {
+	ctx, cancel := context.WithCancel(ctx)
+	out := make(chan *grabbed, 1)
+	pool := make(chan *grabbed, 3)
+	for range 3 {
+		pool <- &grabbed{}
+	}
+	done := make(chan struct{})
+	interval := time.Second / maxFPS
+	go func() {
+		defer close(done)
+		for {
+			start := time.Now()
+			var g *grabbed
+			select {
+			case <-ctx.Done():
+				return
+			case g = <-pool:
+			}
+			f, dur, err := s.grab(d)
+			g.dur, g.err = dur, err
+			if err == nil {
+				row := f.W * 4
+				if need := row * f.H; cap(g.f.Pix) < need {
+					g.f.Pix = make([]byte, need)
+				} else {
+					g.f.Pix = g.f.Pix[:need]
+				}
+				g.f.W, g.f.H, g.f.Stride = f.W, f.H, row
+				if f.Stride == row {
+					copy(g.f.Pix, f.Pix[:row*f.H])
+				} else {
+					for y := range f.H {
+						copy(g.f.Pix[y*row:(y+1)*row], f.Pix[y*f.Stride:])
+					}
+				}
+			}
+			select {
+			case out <- g:
+			default: // tüketici yetişemiyor: eski kareyi geri dönüştür, yenisini koy
+				select {
+				case old := <-out:
+					pool <- old
+				default:
+				}
+				out <- g
+			}
+			wait := interval - time.Since(start)
+			if err != nil {
+				wait = 500 * time.Millisecond
+			}
+			if !sleepCtx(ctx, wait) {
+				return
+			}
+		}
+	}()
+	return out, pool, func() { cancel(); <-done }
+}
+
 // captureRetry, yakalama başarısızsa (kilit ekranı, UAC) bekleyip tekrar dener.
 func (s *session) captureRetry(ctx context.Context) (*capture.Frame, error) {
 	for {
-		f, err := s.cp.Capture(s.displays[s.cur])
+		f, _, err := s.grab(s.displays[s.cur])
 		if err == nil {
 			return f, nil
 		}
@@ -362,54 +448,75 @@ func (s *session) captureRetry(ctx context.Context) (*capture.Frame, error) {
 	}
 }
 
-// jpegLoop, değişen 64x64 karoları JPEG olarak gönderir. Akış kontrolü: viewer bir kareyi
-// çizip "ack" gönderene kadar yeni kare gönderilmez.
+// waitWindow, akış penceresi doluysa bir onay (veya ayar değişikliği) gelene kadar bekler.
+func (s *session) waitWindow(ctx context.Context, fl *flow, ack chan struct{}, extra <-chan error) error {
+	for fl.full() {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case err := <-extra:
+			return err
+		case <-ack:
+			fl.onAck()
+		case <-s.poke:
+			return nil
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	return nil
+}
+
+// jpegLoop, değişen 64x64 karoları JPEG olarak gönderir. Viewer her kareyi çizince
+// "ack" gönderir; yolda olabilecek kare sayısı RTT'ye göre ayarlanır (flow).
 func (s *session) jpegLoop(ctx context.Context) error {
 	var prev []byte
 	first := true
 	var pw, ph, pstride int
-	interval := time.Second / maxFPS
-	select {
-	case s.ack <- struct{}{}:
-	default:
-	}
+	d := s.displays[s.cur]
+	frames, free, stop := s.startGrabber(ctx, d)
+	defer stop()
+	fl := newFlow(maxFPS)
+	var pf perf
+	clearChan(s.ack)
 
 	for {
+		drainAcks(s.ack, fl)
+		if err := s.waitWindow(ctx, fl, s.ack, nil); err != nil {
+			return err
+		}
+		if restart, err := s.applyRequests(ctx); err != nil {
+			return err
+		} else if restart {
+			return errRestart
+		}
+
+		var g *grabbed
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-s.ack:
+		case <-s.poke:
+			continue
+		case g = <-frames:
+		}
+		if g.err != nil {
+			log.Printf("yakalama hatası: %v", g.err)
+			free <- g
+			continue
+		}
+		pf.capture(g.dur)
+		f := &g.f
+		if first || f.W != pw || f.H != ph || f.Stride != pstride {
+			first = false
+			pw, ph, pstride = f.W, f.H, f.Stride
+			prev = nil
+			s.setMapping(d, f.W, f.H)
+			if err := wsjson.Write(ctx, s.c, map[string]any{"t": "init", "w": f.W, "h": f.H}); err != nil {
+				return err
+			}
 		}
 
-		for {
-			start := time.Now()
-			if restart, err := s.applyRequests(ctx); err != nil {
-				return err
-			} else if restart {
-				return errRestart
-			}
-			f, err := s.captureRetry(ctx)
-			if err != nil {
-				return err
-			}
-			if first || f.W != pw || f.H != ph || f.Stride != pstride {
-				first = false
-				pw, ph, pstride = f.W, f.H, f.Stride
-				prev = nil
-				s.setMapping(s.displays[s.cur], f.W, f.H)
-				if err := wsjson.Write(ctx, s.c, map[string]any{"t": "init", "w": f.W, "h": f.H}); err != nil {
-					return err
-				}
-			}
-
-			rects := diffRects(prev, f)
-			if len(rects) == 0 {
-				if !sleepCtx(ctx, interval-time.Since(start)) {
-					return ctx.Err()
-				}
-				continue
-			}
-
+		rects := diffRects(prev, f)
+		if len(rects) > 0 {
 			for _, p := range encodeRects(f, rects, int(s.quality.Load())) {
 				if err := s.c.Write(ctx, websocket.MessageBinary, p); err != nil {
 					return err
@@ -418,17 +525,15 @@ func (s *session) jpegLoop(ctx context.Context) error {
 			if err := s.c.Write(ctx, websocket.MessageBinary, []byte{msgFrameEnd}); err != nil {
 				return err
 			}
-
+			fl.onSend()
+			pf.frame()
 			if len(prev) != len(f.Pix) {
 				prev = make([]byte, len(f.Pix))
 			}
 			copy(prev, f.Pix)
-
-			if !sleepCtx(ctx, interval-time.Since(start)) {
-				return ctx.Err()
-			}
-			break
 		}
+		free <- g
+		pf.report(ctx, s.c, fl, pw, ph)
 	}
 }
 
@@ -442,7 +547,7 @@ func fitEven(w, h, maxW int) (int, int) {
 
 // h264Loop, ekranı ffmpeg ile H.264'e kodlar. Ekran değiştiğinde (ve ardından kaliteyi
 // iyileştirmek için birkaç kare daha) kare gönderilir; ekran durağanken trafik olmaz.
-// Akış kontrolü: viewer'ın çözmediği kare sayısı maxInflight'ı geçemez.
+// Akış kontrolü: viewer'ın çözmediği kare sayısı RTT'ye göre sınırlanır (flow).
 func (s *session) h264Loop(ctx context.Context) error {
 	bin, enc, ok := s.videoReady()
 	if !ok {
@@ -459,7 +564,7 @@ func (s *session) h264Loop(ctx context.Context) error {
 
 	ectx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	e, err := video.Start(ectx, bin, enc, inW, inH, outW, outH, video.BitrateFor(int(q)))
+	e, err := video.Start(ectx, bin, enc, inW, inH, outW, outH, maxFPS, video.BitrateFor(int(q)))
 	if err != nil {
 		return fmt.Errorf("%w: %v", errVideoFailed, err)
 	}
@@ -470,9 +575,7 @@ func (s *session) h264Loop(ctx context.Context) error {
 		return err
 	}
 	s.keyframe.Store(false)
-	for len(s.vack) > 0 {
-		<-s.vack
-	}
+	clearChan(s.vack)
 
 	// ffmpeg çıktısı -> websocket
 	sendErr := make(chan error, 1)
@@ -500,14 +603,17 @@ func (s *session) h264Loop(ctx context.Context) error {
 		}
 	}()
 
+	fl := newFlow(maxFPS)
+	var pf perf
 	prev := make([]byte, len(f.Pix))
 	copy(prev, f.Pix)
 	if err := e.WriteFrame(f); err != nil {
 		return fmt.Errorf("%w: %v", errVideoFailed, err)
 	}
-	inflight, refine := 1, refineFrames
-	lastAck := time.Now()
-	interval := time.Second / maxFPS
+	fl.onSend()
+	refine := refineFrames
+	frames, free, stop := s.startGrabber(ctx, d)
+	defer stop()
 
 	writeFailed := func() error {
 		select {
@@ -519,19 +625,7 @@ func (s *session) h264Loop(ctx context.Context) error {
 	}
 
 	for {
-		start := time.Now()
-	drain:
-		for {
-			select {
-			case <-s.vack:
-				inflight--
-				lastAck = time.Now()
-			default:
-				break drain
-			}
-		}
-		inflight = max(inflight, 0)
-
+		drainAcks(s.vack, fl)
 		select {
 		case err := <-sendErr:
 			return err
@@ -542,58 +636,53 @@ func (s *session) h264Loop(ctx context.Context) error {
 		} else if restart || s.keyframe.Load() || s.quality.Load() != q {
 			return errRestart
 		}
-
-		if inflight >= maxInflight {
-			if time.Since(lastAck) > time.Second {
-				inflight = 0 // viewer bir onayı kaçırmış olabilir
-			} else {
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				case err := <-sendErr:
-					return err
-				case <-s.vack:
-					inflight--
-					lastAck = time.Now()
-				case <-s.poke:
-				case <-time.After(50 * time.Millisecond):
-				}
-				continue
-			}
+		if err := s.waitWindow(ctx, fl, s.vack, sendErr); err != nil {
+			return err
+		}
+		if fl.full() {
+			continue // poke ile uyandık; istekleri yukarıda işle
 		}
 
-		f, err := s.cp.Capture(d)
-		if err != nil {
-			log.Printf("yakalama hatası: %v", err)
-			if !sleepCtx(ctx, 500*time.Millisecond) {
-				return ctx.Err()
-			}
+		var g *grabbed
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case err := <-sendErr:
+			return err
+		case <-s.poke:
+			continue
+		case g = <-frames:
+		}
+		if g.err != nil {
+			log.Printf("yakalama hatası: %v", g.err)
+			free <- g
 			continue
 		}
+		pf.capture(g.dur)
+		f := &g.f
 		if f.W != inW || f.H != inH {
+			free <- g
 			return errRestart
 		}
+		pf.report(ctx, s.c, fl, outW, outH)
+		send := true
 		if !bytes.Equal(f.Pix, prev) {
 			copy(prev, f.Pix)
 			refine = refineFrames
 		} else if refine > 0 {
 			refine--
 		} else {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-s.poke:
-			case <-time.After(interval - time.Since(start)):
+			send = false // ekran durağan: trafik yok
+		}
+		if send {
+			if err := e.WriteFrame(f); err != nil {
+				free <- g
+				return writeFailed()
 			}
-			continue
+			fl.onSend()
+			pf.frame()
 		}
-		if err := e.WriteFrame(f); err != nil {
-			return writeFailed()
-		}
-		inflight++
-		if !sleepCtx(ctx, interval-time.Since(start)) {
-			return ctx.Err()
-		}
+		free <- g
 	}
 }
 

@@ -10,6 +10,8 @@ let connected = false;
 let everConnected = false;
 let failed = false;
 let pendingRects = [];
+let drawChain = Promise.resolve();
+let hostStat = null;
 let frames = 0, bytes = 0, rtt = null;
 let lastPos = { x: 0, y: 0 };
 const pressedKeys = new Set();
@@ -108,6 +110,9 @@ function onMessage(ev) {
       case 'notice':
         toast(m.msg);
         break;
+      case 'hstat':
+        hostStat = m;
+        break;
       case 'warn': {
         const box = $('vwarn');
         box.innerHTML = '';
@@ -144,9 +149,10 @@ function onMessage(ev) {
   } else if (type === 3) {
     onVideo(buf);
   } else if (type === 2) {
+    // Birden fazla kare aynı anda yolda olabilir: kareler geliş sırasıyla çizilmeli.
     const list = pendingRects;
     pendingRects = [];
-    Promise.all(list).then((items) => {
+    drawChain = drawChain.then(() => Promise.all(list)).then((items) => {
       for (const it of items) {
         if (!it) continue;
         ctx.drawImage(it.bmp, it.x, it.y);
@@ -339,7 +345,15 @@ setInterval(() => {
   if (!connected) { $('vStat').textContent = ''; return; }
   const r = rtt == null ? '–' : Math.round(rtt) + ' ms';
   const codec = mode === 'h264' ? 'H.264' + (encoderName ? ' ' + encoderName.replace('h264_', '') : '') : 'JPEG';
-  $('vStat').textContent = `${codec} · ${frames} fps · ${r} · ${Math.round(bytes / 1024)} KB/s`;
+  let host = '';
+  if (hostStat) {
+    host = ` · kaynak ${Math.round(hostStat.fps)} fps, yakalama ${hostStat.cap.toFixed(0)} ms, ${hostStat.w}×${hostStat.h}`;
+  }
+  $('vStat').textContent = `${codec} · ${frames} fps · ${r} · ${Math.round(bytes / 1024)} KB/s${host}`;
+  $('vStat').title = hostStat
+    ? `Karşı taraf: ${hostStat.fps.toFixed(1)} kare/sn üretiyor, ekran yakalama ortalama ${hostStat.cap.toFixed(1)} ms, ` +
+      `gidiş-dönüş ${hostStat.rtt} ms, yolda en fazla ${hostStat.win} kare.`
+    : '';
   frames = 0;
   bytes = 0;
 }, 1000);

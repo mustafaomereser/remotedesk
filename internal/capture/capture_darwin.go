@@ -110,7 +110,15 @@ func Displays() ([]Display, error) {
 
 type Capturer struct {
 	buf   []byte
+	data  uintptr // son karenin CFData'sı; Pix doğrudan onu gösterir (kopya yok)
 	frame Frame
+}
+
+func (c *Capturer) releaseData() {
+	if c.data != 0 {
+		cfRelease(c.data)
+		c.data = 0
+	}
 }
 
 func New() (*Capturer, error) {
@@ -137,20 +145,29 @@ func (c *Capturer) Capture(d Display) (*Frame, error) {
 	if data == 0 {
 		return nil, errors.New("görüntü verisi alınamadı")
 	}
-	defer cfRelease(data)
 	need := stride * h
 	if cfDataGetLength(data) < need {
+		cfRelease(data)
 		return nil, errors.New("görüntü verisi eksik")
+	}
+	// Önceki karenin verisi artık kullanılmıyor (Frame.Pix bir sonraki Capture'a kadar geçerli).
+	c.releaseData()
+	c.data = data
+	pix := unsafe.Slice((*byte)(cfDataGetBytePtr(data)), need)
+
+	// Genelde BGRA (32Little + alpha first) gelir: kopyalamadan kullan.
+	// Değilse kendi tamponumuza kopyalayıp BGRA'ya çevir (CFData salt okunurdur).
+	info := cgImageGetBitmapInfo(img)
+	if info&0x7000 == 0x2000 {
+		c.frame = Frame{W: w, H: h, Stride: stride, Pix: pix}
+		return &c.frame, nil
 	}
 	if cap(c.buf) < need {
 		c.buf = make([]byte, need)
 	}
 	c.buf = c.buf[:need]
-	copy(c.buf, unsafe.Slice((*byte)(cfDataGetBytePtr(data)), need))
-
-	// Genelde BGRA (32Little + alpha first) gelir; değilse BGRA'ya çevir.
-	info := cgImageGetBitmapInfo(img)
-	if info&0x7000 != 0x2000 {
+	copy(c.buf, pix)
+	{
 		alpha := info & 0x1F
 		alphaFirst := alpha == 2 || alpha == 4 || alpha == 6
 		p := c.buf
@@ -169,4 +186,4 @@ func (c *Capturer) Capture(d Display) (*Frame, error) {
 	return &c.frame, nil
 }
 
-func (c *Capturer) Close() {}
+func (c *Capturer) Close() { c.releaseData() }

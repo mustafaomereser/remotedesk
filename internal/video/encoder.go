@@ -35,17 +35,17 @@ func encoderArgs(enc string, bitrate int) []string {
 	default:
 		a = []string{"-b:v", b}
 	}
-	return append(a, "-g", "300", "-bf", "0")
+	return append(a, "-g", "600", "-bf", "0")
 }
 
 // BitrateFor, viewer'daki kalite ayarını (10-95) bit hızına çevirir.
 func BitrateFor(quality int) int {
 	switch {
 	case quality <= 45:
-		return 2_500_000
+		return 4_000_000
 	case quality <= 70:
-		return 6_000_000
+		return 10_000_000
 	default:
-		return 12_000_000
+		return 20_000_000
 	}
 }

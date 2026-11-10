@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -32,14 +33,14 @@ type Encoder struct {
 }
 
 // Start, ffmpeg'i başlatır. inW×inH giriş boyutu, outW×outH kodlanan boyuttur (çift sayı olmalı).
-func Start(ctx context.Context, bin, enc string, inW, inH, outW, outH, bitrate int) (*Encoder, error) {
+func Start(ctx context.Context, bin, enc string, inW, inH, outW, outH, fps, bitrate int) (*Encoder, error) {
 	vf := "format=nv12"
 	if outW != inW || outH != inH {
 		vf = fmt.Sprintf("scale=%d:%d:flags=bilinear,format=nv12", outW, outH)
 	}
 	args := []string{"-hide_banner", "-loglevel", "error",
 		"-f", "rawvideo", "-pix_fmt", "bgra", "-video_size", fmt.Sprintf("%dx%d", inW, inH),
-		"-framerate", "30", "-i", "pipe:0",
+		"-framerate", strconv.Itoa(fps), "-i", "pipe:0",
 		"-vf", vf, "-c:v", enc}
 	args = append(args, encoderArgs(enc, bitrate)...)
 	args = append(args, "-flush_packets", "1", "-f", "h264", "pipe:1")
