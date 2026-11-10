@@ -309,11 +309,11 @@ function renderDisplays(list, cur) {
   list.forEach((d, i) => {
     const o = document.createElement('option');
     o.value = i;
-    o.textContent = `Ekran ${i + 1} (${d.w}×${d.h})${d.primary ? ' · ana' : ''}`;
+    o.textContent = `Ekran ${i + 1} · ${d.w}×${d.h}${d.primary ? ' · ana' : ''}`;
     sel.appendChild(o);
   });
   sel.value = String(cur);
-  $('displayRow').classList.toggle('hidden', list.length < 2);
+  sel.classList.toggle('hidden', list.length < 2);
 }
 
 $('display').onchange = (e) => {

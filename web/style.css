@@ -289,6 +289,13 @@ body.viewer { display: flex; flex-direction: column; height: 100vh; overflow: hi
 .vbar .stat { font-size: 12px; color: var(--faint); white-space: nowrap; flex: none; cursor: help; }
 .vbar .vctl { display: flex; align-items: center; gap: 8px; flex: none; }
 
+.vdisp {
+  height: 30px; max-width: 230px; padding: 0 10px;
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: 9999px;
+  font-size: 12.5px; font-weight: 500; cursor: pointer;
+}
+.vdisp:hover { border-color: var(--line-2); background: #2e3236; }
+
 .vset { position: relative; }
 .vset summary {
   list-style: none; display: inline-flex; align-items: center; gap: 6px;
