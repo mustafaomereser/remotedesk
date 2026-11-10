@@ -52,6 +52,7 @@ type session struct {
 	concurrent func() bool // "aynı anda kullanım" açık mı
 	lastBusy   time.Time   // "karşı taraf kullanıyor" bildiriminin son gönderimi
 	lastRoute  int
+	remotePos  atomic.Uint64 // uzaktaki kişinin son imleç konumu (x<<32 | y), 0 = yok
 
 	quality     atomic.Int32
 	wantDisplay atomic.Int32 // -1: değişiklik yok
@@ -108,6 +109,7 @@ func (s *session) run(ctx context.Context) error {
 		cancel()
 	}()
 	go s.clipboardLoop(ctx)
+	go s.takeoverLabel(ctx)
 	return s.streamLoop(ctx)
 }
 
@@ -129,9 +131,11 @@ func (s *session) readLoop(ctx context.Context) {
 			default:
 			}
 		case "mm":
+			s.remotePos.Store(uint64(uint32(m.X))<<32 | uint64(uint32(m.Y)) | 1<<63)
 			switch s.route(ctx, false) {
 			case routeNormal:
 				s.in.Move(m.X, m.Y)
+			case routeDrop:
 				s.label(m.X, m.Y, false)
 			case routeSim:
 				s.in.BgMove(m.X, m.Y)
@@ -146,7 +150,6 @@ func (s *session) readLoop(ctx context.Context) {
 			switch s.route(ctx, !m.D) {
 			case routeNormal:
 				s.in.Button(m.B, m.D, m.X, m.Y)
-				s.label(m.X, m.Y, false)
 			case routeSim:
 				s.in.BgButton(m.B, m.D, m.X, m.Y)
 				s.label(m.X, m.Y, true)
@@ -229,6 +232,29 @@ func (s *session) route(ctx context.Context, release bool) int {
 		wsjson.Write(ctx, s.c, map[string]any{"t": "busy", "mode": mode})
 	}
 	return r
+}
+
+// takeoverLabel: kontrol bağlanan kişideyken ad etiketi gösterilmez (imleç zaten onun).
+// Ana kullanıcı fareyi/klavyeyi devralınca, bağlanan kişinin imlecinin nerede kaldığı
+// ad etiketiyle gösterilir; ana kullanıcı bırakınca etiket kaybolur.
+func (s *session) takeoverLabel(ctx context.Context) {
+	t := time.NewTicker(150 * time.Millisecond)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		if s.concurrent != nil && s.concurrent() {
+			continue // aynı anda kullanımda hayalet imleç zaten çiziliyor
+		}
+		p := s.remotePos.Load()
+		if p == 0 || !desktop.LocalActive(localPriority) {
+			continue
+		}
+		s.label(int(int32(uint32(p>>32)&0x7FFFFFFF)), int(int32(uint32(p))), false)
+	}
 }
 
 // label, ad etiketini uzaktaki kişinin işlem yaptığı noktaya koyar. ghost=true ise
