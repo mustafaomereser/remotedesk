@@ -16,6 +16,7 @@ import (
 	"image/jpeg"
 	"image/png"
 	"log"
+	"math"
 	"os"
 	"time"
 
@@ -33,6 +34,8 @@ func main() {
 	dur := flag.Duration("dur", 0, "kare sayısı yerine bu süre boyunca dinle (ör. 6s)")
 	h264 := flag.Bool("h264", false, "H.264 iste")
 	h264out := flag.String("h264out", "", "H.264 akışını bu dosyaya yaz")
+	name := flag.String("name", "", "bağlanırken gönderilecek ad (imleç etiketi)")
+	move := flag.Bool("move", false, "bağlanınca fareyi ekranın ortasında daire çizerek gezdir")
 	flag.Parse()
 
 	var vf *os.File
@@ -66,7 +69,7 @@ func main() {
 	}
 	defer c.CloseNow()
 	c.SetReadLimit(64 << 20)
-	wsjson.Write(ctx, c, map[string]any{"t": "auth", "pw": *pw, "h264": *h264})
+	wsjson.Write(ctx, c, map[string]any{"t": "auth", "pw": *pw, "h264": *h264, "name": *name})
 
 	var canvas *image.RGBA
 	gotFrame := func() {
@@ -93,6 +96,18 @@ func main() {
 				if *clip != "" {
 					wsjson.Write(ctx, c, map[string]string{"t": "clip", "text": *clip})
 					*clip = ""
+				}
+				if *move {
+					*move = false
+					go func(w, h int) {
+						for i := 0; ctx.Err() == nil; i++ {
+							a := float64(i) / 10
+							x := w/2 + int(float64(w/6)*math.Cos(a))
+							y := h/2 + int(float64(h/6)*math.Sin(a))
+							wsjson.Write(ctx, c, map[string]any{"t": "mm", "x": x, "y": y})
+							time.Sleep(33 * time.Millisecond)
+						}
+					}(m.W, m.H)
 				}
 				if *disp >= 0 {
 					wsjson.Write(ctx, c, map[string]any{"t": "disp", "i": *disp})

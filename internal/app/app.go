@@ -38,6 +38,7 @@ type Options struct {
 	AutoAccept bool
 	NoTunnel   bool
 	Password   string
+	Concurrent bool
 }
 
 type Session struct {
@@ -113,7 +114,7 @@ func New(o Options) *App {
 		st: State{
 			Tunnel: "starting", TunnelMsg: "Başlatılıyor…",
 			Video: "starting", VideoMsg: "H.264 hazırlanıyor…",
-			Password: pw, AutoAccept: o.AutoAccept,
+			Password: pw, AutoAccept: o.AutoAccept, Concurrent: o.Concurrent,
 		},
 	}
 	a.host = &host.Server{

@@ -67,6 +67,33 @@ jobs:
           cat ~/Library/Application\ Support/RemoteDesk/remotedesk.log 2>&1 | head -60
           pkill -f RemoteDesk || true; pkill -x open || true
 
+      - uses: actions/checkout@v4
+        if: always()
+
+      - uses: actions/setup-go@v5
+        if: always()
+        with:
+          go-version-file: go.mod
+
+      - name: Ad etiketi (probe ile bağlan, fareyi gezdir)
+        if: always()
+        timeout-minutes: 4
+        run: |
+          pkill -f RemoteDesk || true
+          go build -o probe ./cmd/probe
+          /Applications/RemoteDesk.app/Contents/MacOS/RemoteDesk -headless -notunnel -autoaccept -concurrent -password testsifre > label-host.txt 2>&1 &
+          HOST=$!
+          for i in $(seq 1 30); do grep -q "ID *:" label-host.txt && break; sleep 1; done
+          ADDR="$(sed -n 's/.*ID *: *//p' label-host.txt | head -1)"
+          echo "host: $ADDR"
+          ./probe -url "ws://$ADDR/ws" -pw testsifre -name "CI Test Kullanıcı" -move -dur 6s > label-probe.txt 2>&1 &
+          sleep 3
+          screencapture -x shots/4-etiket.png || true
+          sleep 4
+          kill $HOST 2>/dev/null; wait $HOST 2>/dev/null
+          echo "--- host"; head -40 label-host.txt
+          echo "--- probe"; grep -E "kontrol: \{\"(t|enc)\":\"(mode|busy|warn)|ilk kare" label-probe.txt | head -10
+
       - name: Doğrudan çalıştırma (stderr)
         if: always()
         timeout-minutes: 2

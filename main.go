@@ -40,6 +40,7 @@ func run() {
 	autoAccept := flag.Bool("autoaccept", false, "Gelen bağlantıları onay sormadan kabul et")
 	password := flag.String("password", "", "Sabit şifre (boşsa rastgele üretilir)")
 	noTunnel := flag.Bool("notunnel", false, "Tünel açma, sadece 127.0.0.1 üzerinde dinle (test için)")
+	concurrent := flag.Bool("concurrent", false, "Aynı anda kullanımı (simülasyon modu) açık başlat")
 	flag.Parse()
 
 	dir := dataDir()
@@ -75,6 +76,7 @@ func run() {
 		AutoAccept: *autoAccept,
 		NoTunnel:   *noTunnel,
 		Password:   *password,
+		Concurrent: *concurrent,
 	})
 	if err := a.Run(); err != nil {
 		fail(err.Error())
