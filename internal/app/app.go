@@ -414,7 +414,7 @@ func (a *App) tunnelLoop(ctx context.Context) {
 	}
 	setOff := func() {
 		a.update(func(s *State) {
-			s.Tunnel, s.ID, s.TunnelMsg = "off", "", "Tünel kapalı · bağlantı almak için Tüneli aç"
+			s.Tunnel, s.ID, s.TunnelMsg = "off", "", "Tünel kapalı"
 		})
 	}
 	if a.opts.Headless {

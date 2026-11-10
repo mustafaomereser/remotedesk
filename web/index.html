@@ -6,69 +6,109 @@
   <title>RemoteDesk</title>
   <link rel="stylesheet" href="style.css">
 </head>
-<body>
+<body class="app">
   <header class="top">
     <div class="brand"><span class="logo"></span>RemoteDesk</div>
+    <div class="top-status">
+      <span class="pill"><span id="tunDot" class="dot busy"></span><span id="tunMsg">Başlatılıyor…</span></span>
+      <span class="pill"><span id="vidDot" class="dot busy"></span><span id="vidMsg">H.264 hazırlanıyor…</span></span>
+    </div>
     <button id="quit" class="ghost small">Çıkış</button>
   </header>
 
   <main class="grid">
+    <!-- ---- bu bilgisayar ---- -->
     <section class="card">
-      <h2>Bu Bilgisayar</h2>
-      <p class="muted">Başka biri bu bilgisayara bağlanacaksa ona bu ID'yi ve şifreyi ver.</p>
-
-      <label class="lbl">ID</label>
-      <div class="field big">
-        <span id="myId" class="value mono">—</span>
-        <button class="small" id="idCopy">Kopyala</button>
-        <button class="small" id="tunBtn">Tüneli aç</button>
+      <div class="card-head">
+        <h2>Bu bilgisayar</h2>
+        <p>Başka biri bağlanacaksa ona ID'yi ve şifreyi ver.</p>
       </div>
 
-      <label class="lbl">Şifre</label>
-      <div class="field">
-        <span id="myPw" class="value mono">—</span>
-        <button class="small" id="pwShow">Göster</button>
-        <button class="small" id="pwCopy">Kopyala</button>
-        <button class="small" id="pwNew" title="Yeni rastgele şifre üret">Yenile</button>
-        <button class="small" id="pwEdit" title="Kendi şifreni belirle">Değiştir</button>
+      <div class="cred">
+        <div class="cred-label">ID</div>
+        <div class="cred-row">
+          <span id="myId" class="cred-value mono">—</span>
+          <div class="cred-actions">
+            <button class="small" id="idCopy">Kopyala</button>
+            <button class="small" id="tunBtn">Tüneli aç</button>
+          </div>
+        </div>
       </div>
-      <form id="pwForm" class="pwform hidden">
-        <input id="pwInput" type="text" minlength="6" placeholder="En az 6 karakter" autocomplete="off">
-        <button class="primary small" type="submit">Kaydet</button>
-        <button class="ghost small" type="button" id="pwCancel">Vazgeç</button>
-      </form>
 
-      <div class="status"><span id="tunDot" class="dot busy"></span><span id="tunMsg">Başlatılıyor…</span></div>
-      <div class="status" style="margin-top:6px"><span id="vidDot" class="dot busy"></span><span id="vidMsg">H.264 hazırlanıyor…</span></div>
+      <div class="cred">
+        <div class="cred-label">Şifre</div>
+        <div class="cred-row">
+          <span id="myPw" class="cred-value mono">—</span>
+          <div class="cred-actions">
+            <button class="small" id="pwShow">Göster</button>
+            <button class="small" id="pwCopy">Kopyala</button>
+            <button class="small" id="pwNew" title="Yeni rastgele şifre üret">Yenile</button>
+            <button class="small" id="pwEdit" title="Kendi şifreni belirle">Değiştir</button>
+          </div>
+        </div>
+        <form id="pwForm" class="pwform hidden">
+          <input id="pwInput" type="text" minlength="6" placeholder="En az 6 karakter" autocomplete="off">
+          <button class="primary small" type="submit">Kaydet</button>
+          <button class="ghost small" type="button" id="pwCancel">Vazgeç</button>
+        </form>
+      </div>
+
       <div id="warnings"></div>
 
-      <label class="check"><input type="checkbox" id="autoAccept"> Bağlantıları onay sormadan kabul et</label>
-      <label class="check"><input type="checkbox" id="concurrent"> Aynı anda kullanım <span class="tag">deneysel</span></label>
+      <div id="sessionBox" class="session hidden">
+        <div class="session-info">
+          <span class="dot ok"></span>
+          <span>Bağlı: <b id="sessName"></b> <span id="sessRemote" class="muted mono"></span> <span id="sessTime" class="muted"></span></span>
+        </div>
+        <button id="kick" class="danger small">Bağlantıyı kes</button>
+      </div>
+
+      <div class="rows">
+        <label class="row">
+          <span class="row-text">
+            <span class="row-title">Onay sormadan kabul et</span>
+            <span class="row-hint">Doğru şifreyle gelen bağlantı hemen başlar.</span>
+          </span>
+          <input type="checkbox" class="switch" id="autoAccept">
+        </label>
+        <label class="row">
+          <span class="row-text">
+            <span class="row-title">Aynı anda kullanım <span class="tag">deneysel</span></span>
+            <span class="row-hint">Senin imlecin kıpırdamaz, bağlanan kişi hayalet imleçle çalışır.</span>
+          </span>
+          <input type="checkbox" class="switch" id="concurrent">
+        </label>
+      </div>
       <details class="explain">
-        <summary>Bu ne yapar?</summary>
+        <summary>Aynı anda kullanım ne yapar?</summary>
         <p><b>Kapalıyken:</b> tek, ortak imleç vardır. Bağlanan kişi imleci oynatırken yanında adı görünür. Sen fareye veya klavyeye dokunduğun anda onun girişi <b>1 saniye bekletilir</b>; imleç için kavga etmezsiniz.</p>
         <p><b>Açıkken:</b> senin imlecin <b>hiç kıpırdamaz</b>. Bağlanan kişi ekranda adıyla birlikte kendi <b>hayalet imleciyle</b> çalışır; tıkladığı pencereye doğrudan komut gönderilir. İkiniz aynı anda kullanabilirsiniz.</p>
         <p><b>Hayalet imleçle çalışanlar:</b> klasik uygulamalarda tıklama ve çift tıklama, yazı yazma, Enter / Backspace / ok tuşları, kaydırma (Not Defteri, Gezgin, ayar pencereleri, iletişim kutuları; Mac'te standart düğme ve metin kutuları).</p>
-        <p><b>Çalışmayanlar:</b> Chrome / Edge / Safari ve Electron uygulamaları (VS Code, Discord, Slack, Spotify…), kısayollar (Ctrl+C, Cmd+V…), sürükle-bırak, sağ tık ve açılır menüler, oyunlar, yönetici olarak çalışan programlar. Mac'te arka plandaki pencereler ilk tıklamayı yok sayabilir. Bunlar gerekiyorsa bu ayarı kapatın.</p>
+        <p><b>Çalışmayanlar:</b> Chrome / Edge / Safari ve Electron uygulamaları (VS Code, Discord, Slack, Spotify…), kısayollar (Ctrl+C, Cmd+V…), sürükleme ve sürükle-bırak, sağ tık ve açılır menüler, oyunlar, yönetici olarak çalışan programlar. Mac'te arka plandaki pencereler ilk tıklamayı yok sayabilir. Bunlar gerekiyorsa bu ayarı kapatın.</p>
       </details>
-
-      <div id="sessionBox" class="session hidden">
-        <span>Bağlı: <b id="sessName"></b> <span id="sessRemote" class="muted mono"></span> <span id="sessTime" class="muted"></span></span>
-        <button id="kick" class="danger small">Bağlantıyı kes</button>
-      </div>
     </section>
 
+    <!-- ---- uzak bilgisayar ---- -->
     <section class="card">
-      <h2>Uzak Bilgisayar</h2>
-      <p class="muted">Bağlanmak istediğin bilgisayarın ID'sini ve şifresini gir.</p>
-      <form id="connectForm" autocomplete="off">
-        <label class="lbl" for="myName">Adın (karşı tarafta imlecin yanında görünür)</label>
-        <input id="myName" type="text" maxlength="32" spellcheck="false" placeholder="Adın">
-        <label class="lbl" for="remoteId">ID</label>
-        <input id="remoteId" type="text" placeholder="ornek-kelime-kelime-kelime" spellcheck="false" required>
-        <label class="lbl" for="remotePw">Şifre</label>
-        <input id="remotePw" type="password" required>
-        <button class="primary wide" type="submit" style="width:100%">Bağlan</button>
+      <div class="card-head">
+        <h2>Uzak bilgisayara bağlan</h2>
+        <p>Bağlanmak istediğin bilgisayarın ID'sini ve şifresini gir.</p>
+      </div>
+      <form id="connectForm" class="form" autocomplete="off">
+        <div class="field">
+          <label for="remoteId">ID</label>
+          <input id="remoteId" type="text" placeholder="ornek-kelime-kelime-kelime" spellcheck="false" required>
+        </div>
+        <div class="field">
+          <label for="remotePw">Şifre</label>
+          <input id="remotePw" type="password" required>
+        </div>
+        <div class="field">
+          <label for="myName">Adın</label>
+          <input id="myName" type="text" maxlength="32" spellcheck="false" placeholder="Adın">
+          <span class="hint">Karşı tarafta imlecinin yanında görünür.</span>
+        </div>
+        <button class="primary block" type="submit">Bağlan</button>
         <div id="connectErr" class="error-text"></div>
       </form>
       <div id="recent" class="recent"></div>
@@ -81,7 +121,7 @@
       <p><b id="reqName"></b> <span id="reqRemote" class="muted mono"></span> bu bilgisayarı kontrol etmek istiyor.</p>
       <p class="muted">Tanımıyorsan reddet.</p>
       <div class="bar-timer"><div id="reqBar"></div></div>
-      <div class="row">
+      <div class="dialog-actions">
         <button id="reject">Reddet</button>
         <button id="accept" class="primary">Kabul et</button>
       </div>

@@ -48,7 +48,8 @@ function connectEvents() {
 
 function render(s) {
   state = s;
-  $('myId').textContent = s.id || (s.tunnel === 'off' ? 'Tünel kapalı' : '—');
+  $('myId').textContent = s.id || (s.tunnel === 'off' ? 'Bağlantı almak için tüneli aç' : 'Hazırlanıyor…');
+  $('myId').classList.toggle('off', !s.id);
   const tb = $('tunBtn');
   tb.classList.toggle('hidden', (s.tunnelMsg || '').startsWith('Yerel mod'));
   tb.textContent = s.tunnel === 'off' ? 'Tüneli aç' : 'Tüneli kapat';
@@ -217,8 +218,7 @@ function renderRecent() {
   const list = loadRecent();
   if (!list.length) return;
   const h = document.createElement('div');
-  h.className = 'lbl muted';
-  h.style.cssText = 'font-size:12px;text-transform:uppercase;letter-spacing:.6px';
+  h.className = 'recent-head';
   h.textContent = 'Son bağlantılar';
   box.appendChild(h);
   for (const id of list) {
