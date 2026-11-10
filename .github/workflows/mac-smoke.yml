@@ -69,6 +69,8 @@ jobs:
 
       - uses: actions/checkout@v4
         if: always()
+        with:
+          clean: false # önceki adımların ekran görüntüleri silinmesin
 
       - uses: actions/setup-go@v5
         if: always()
