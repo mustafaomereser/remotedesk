@@ -70,7 +70,7 @@ async function connect({ id, pw, name, label }) {
       });
       if (!r.ok) throw new Error((await r.text()).trim() || 'Bağlanılamadı.');
       target = (await r.json()).url;
-      retries = 8;
+      retries = 15; // yeni tünelin DNS kaydının yayılması ~10-20 sn sürebilir
     } catch (e) {
       failed = true;
       showOverlay(e.message || 'Bağlanılamadı.', true);

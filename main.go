@@ -17,10 +17,7 @@ import (
 )
 
 // appVersion, sürüm paketlerinde (scripts/build-release.sh) kullanılır.
-// hubServer, kalıcı ID ve çevrimiçi bilgisi için buluşma sunucusudur (server/ klasörü).
-const hubServer = ""
-
-const appVersion = "0.2.1"
+const appVersion = "0.3.0"
 
 func dataDir() string {
 	if runtime.GOOS == "windows" {
@@ -44,7 +41,7 @@ func run() {
 	autoAccept := flag.Bool("autoaccept", false, "Gelen bağlantıları onay sormadan kabul et")
 	password := flag.String("password", "", "Sabit şifre (boşsa rastgele üretilir)")
 	noTunnel := flag.Bool("notunnel", false, "Tünel açma, sadece 127.0.0.1 üzerinde dinle (test için)")
-	server := flag.String("server", hubServer, "Buluşma sunucusu adresi (boşsa kalıcı ID kapalı)")
+	server := flag.String("server", HubServer, "Buluşma sunucusu adresi (boş: sunucusuz mod)")
 	concurrent := flag.Bool("concurrent", false, "Aynı anda kullanımı (simülasyon modu) açık başlat")
 	flag.Parse()
 

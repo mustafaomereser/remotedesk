@@ -55,7 +55,10 @@ function myShownId(s) {
 }
 
 function render(s) {
+  const modeChanged = !state || !!state.hub !== !!s.hub;
   state = s;
+  if (modeChanged) setTimeout(renderPeers, 0);
+  $('remoteId').placeholder = s.hub ? '123 456 789' : 'kelime-kelime-kelime';
   // Kalıcı ID (sunucu açıksa) ya da geçici tünel adresi.
   const hubOn = !!s.hub;
   const local = (s.tunnelMsg || '').startsWith('Yerel mod');
@@ -301,7 +304,8 @@ function iconBtn(text, title, onclick) {
 function renderPeers() {
   const box = $('peers');
   box.innerHTML = '';
-  if (!peers.length) return;
+  // Sunucusuz modda kalıcı ID yok: kayıtlı cihaz listesi gösterilmez.
+  if (!peers.length || (state && !state.hub)) return;
   const h = document.createElement('div');
   h.className = 'recent-head';
   h.textContent = 'Cihazlar';

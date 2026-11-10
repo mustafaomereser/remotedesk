@@ -1,5 +1,11 @@
 package app
 
+// Sunuculu mod: buluşma sunucusu (config.go'daki HubServer) ayarlıysa kullanılır.
+// Kalıcı cihaz ID'si, çevrimiçi durumu, istek üzerine tünel açma ve kayıtlı cihazlar
+// burada. Sunucusuz modda (Options.Server boş) hubLoop hemen döner, bu dosyadaki API
+// uçları boş liste / "sunucu ayarlı değil" yanıtı verir ve uygulama yalnızca
+// app.go'daki "Tüneli aç" yoluyla çalışır.
+
 import (
 	"context"
 	"encoding/json"
