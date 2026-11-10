@@ -661,7 +661,7 @@ canvas.addEventListener('wheel', (e) => {
 // ---- klavye ----
 
 function fromToolbar(e) {
-  return e.target && e.target.closest && e.target.closest('#bar');
+  return e.target && e.target.closest && (e.target.closest('#bar') || e.target.closest('#vctl') || e.target.id === 'kb' || e.target.closest('#mbar'));
 }
 
 window.addEventListener('keydown', (e) => {
@@ -717,6 +717,7 @@ $('scale').onchange = (e) => {
 // Ayarlar menüsü: dışarı tıklayınca veya Esc ile kapanır.
 document.addEventListener('pointerdown', (e) => {
   const d = $('vset');
+  if (document.body.classList.contains('menu-open')) return;
   if (d.open && !d.contains(e.target)) d.open = false;
 });
 document.addEventListener('keydown', (e) => {
@@ -803,3 +804,189 @@ $('callReject').onclick = () => {
   canvas.focus();
 };
 window.addEventListener('beforeunload', () => call.hangup());
+
+// ---- dokunmatik ekran (telefon / tablet) ----
+//   dokun = sol tık · basılı tut = sağ tık · tek parmakla sürükle = sürükle-bırak
+//   iki parmakla kaydır = fare tekerleği (yakınlaştırılmışsa görüntüyü gezdirir)
+//   iki parmakla sıkıştır = yakınlaştır / uzaklaştır
+
+const touchUI = window.matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
+if (touchUI) document.body.classList.add('touch');
+if (!document.fullscreenEnabled) $('fs').classList.add('hidden');
+
+const tp = new Map(); // dokunan parmaklar: pointerId -> {x, y}
+let gesture = null;   // {mode: 'pending'|'drag'|'two'|'done', ...}
+let rightNext = false;
+const zoom = { s: 1, tx: 0, ty: 0 };
+
+function applyZoom() {
+  if (zoom.s <= 1.01) { zoom.s = 1; zoom.tx = 0; zoom.ty = 0; }
+  canvas.style.transformOrigin = '0 0';
+  canvas.style.transform = zoom.s === 1 ? '' : `translate(${zoom.tx}px, ${zoom.ty}px) scale(${zoom.s})`;
+  $('zoomReset').classList.toggle('hidden', zoom.s === 1);
+}
+
+function tap(e, button) {
+  const p = pos(e);
+  send({ t: 'mm', ...p });
+  send({ t: 'mb', b: button, d: true, ...p });
+  send({ t: 'mb', b: button, d: false, ...p });
+}
+
+function twoState() {
+  const [a, b] = [...tp.values()];
+  return { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 };
+}
+
+canvas.addEventListener('pointerdown', (e) => {
+  if (e.pointerType !== 'touch') return;
+  e.preventDefault();
+  tp.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (tp.size === 1) {
+    gesture = { mode: 'pending', sx: e.clientX, sy: e.clientY, startEv: { clientX: e.clientX, clientY: e.clientY } };
+    gesture.timer = setTimeout(() => {
+      if (gesture && gesture.mode === 'pending' && connected) {
+        tap(gesture.startEv, 2); // basılı tut = sağ tık
+        if (navigator.vibrate) navigator.vibrate(15);
+        gesture.mode = 'done';
+      }
+    }, 550);
+  } else if (tp.size === 2) {
+    if (gesture && gesture.timer) clearTimeout(gesture.timer);
+    if (gesture && gesture.mode === 'drag') send({ t: 'mb', b: 0, d: false, ...lastPos });
+    const t = twoState();
+    gesture = { mode: 'two', d0: t.d, mx: t.mx, my: t.my, s0: zoom.s, tx0: zoom.tx, ty0: zoom.ty, mx0: t.mx, my0: t.my, pinching: false, wheelAcc: 0 };
+  }
+}, { passive: false });
+
+canvas.addEventListener('pointermove', (e) => {
+  if (e.pointerType !== 'touch' || !tp.has(e.pointerId)) return;
+  e.preventDefault();
+  tp.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (!gesture || !connected) return;
+  if (gesture.mode === 'pending' && Math.hypot(e.clientX - gesture.sx, e.clientY - gesture.sy) > 10) {
+    clearTimeout(gesture.timer);
+    gesture.mode = 'drag';
+    const p = pos(gesture.startEv);
+    send({ t: 'mm', ...p });
+    send({ t: 'mb', b: 0, d: true, ...p });
+  }
+  if (gesture.mode === 'drag') {
+    if (!queuedMove) requestAnimationFrame(flushMove);
+    queuedMove = pos(e);
+    return;
+  }
+  if (gesture.mode === 'two' && tp.size === 2) {
+    const t = twoState();
+    const ratio = t.d / gesture.d0;
+    if (!gesture.pinching && Math.abs(ratio - 1) > 0.08) gesture.pinching = true;
+    const r = canvas.parentElement.getBoundingClientRect();
+    if (gesture.pinching) {
+      // Yakınlaştır: iki parmağın ortası ekranda aynı noktada kalsın.
+      const s = Math.max(1, Math.min(5, gesture.s0 * ratio));
+      const cx = gesture.mx0 - r.left, cy = gesture.my0 - r.top;
+      const base = canvas.offsetLeft, baseY = canvas.offsetTop;
+      const ux = (cx - base - gesture.tx0) / gesture.s0, uy = (cy - baseY - gesture.ty0) / gesture.s0;
+      zoom.s = s;
+      zoom.tx = cx - base - ux * s + (t.mx - gesture.mx0);
+      zoom.ty = cy - baseY - uy * s + (t.my - gesture.my0);
+      applyZoom();
+    } else if (zoom.s > 1) {
+      zoom.tx = gesture.tx0 + (t.mx - gesture.mx0);
+      zoom.ty = gesture.ty0 + (t.my - gesture.my0);
+      applyZoom();
+    } else {
+      // Kaydır: parmaklar yukarı = içerik aşağı kayar (telefondaki gibi).
+      const dy = t.my - gesture.my;
+      gesture.my = t.my;
+      gesture.wheelAcc += -dy * 3;
+      if (Math.abs(gesture.wheelAcc) >= 30) {
+        send({ t: 'wh', dx: 0, dy: Math.round(gesture.wheelAcc), ...pos({ clientX: t.mx, clientY: t.my }) });
+        gesture.wheelAcc = 0;
+      }
+    }
+  }
+}, { passive: false });
+
+function touchEnd(e) {
+  if (e.pointerType !== 'touch' || !tp.has(e.pointerId)) return;
+  e.preventDefault();
+  tp.delete(e.pointerId);
+  if (!gesture) return;
+  if (gesture.timer) clearTimeout(gesture.timer);
+  if (gesture.mode === 'pending' && tp.size === 0 && connected && e.type === 'pointerup') {
+    tap(e, rightNext ? 2 : 0);
+    if (rightNext) { rightNext = false; $('rcBtn').classList.remove('on'); }
+  } else if (gesture.mode === 'drag' && tp.size === 0) {
+    flushMove();
+    send({ t: 'mb', b: 0, d: false, ...pos(e) });
+  }
+  if (tp.size === 0) gesture = null;
+  else if (gesture.mode === 'two') gesture.mode = 'done'; // bir parmak kaldı: yeni hareket başlatma
+}
+canvas.addEventListener('pointerup', touchEnd, { passive: false });
+canvas.addEventListener('pointercancel', touchEnd, { passive: false });
+
+$('zoomReset').onclick = () => { zoom.s = 1; applyZoom(); };
+$('rcBtn').onclick = (e) => {
+  rightNext = !rightNext;
+  e.currentTarget.classList.toggle('on', rightNext);
+};
+
+// ---- telefon klavyesi ----
+// Gizli giriş kutusu odaklanınca telefon klavyesi açılır. Kutudaki değişiklik farkı
+// gönderilir: eklenen metin "txt", silinen her karakter Backspace, satır sonu Enter.
+// (Android klavyeleri tuş kodu göndermediği için tuş olaylarına güvenilmez.)
+const kb = $('kb');
+let kbLast = '';
+let composing = false;
+
+function sendKey(code) {
+  send({ t: 'k', c: code, d: true });
+  send({ t: 'k', c: code, d: false });
+}
+
+function kbSync() {
+  const v = kb.value;
+  let p = 0;
+  while (p < v.length && p < kbLast.length && v[p] === kbLast[p]) p++;
+  for (let i = kbLast.length - p; i > 0; i--) sendKey('Backspace');
+  const added = v.slice(p);
+  if (added) {
+    const parts = added.split('\n');
+    parts.forEach((part, i) => {
+      if (part) send({ t: 'txt', text: part });
+      if (i < parts.length - 1) sendKey('Enter');
+    });
+  }
+  kbLast = v;
+  if (!composing && v.length > 200) { kb.value = ''; kbLast = ''; }
+}
+
+kb.addEventListener('compositionstart', () => { composing = true; });
+kb.addEventListener('compositionend', () => { composing = false; kbSync(); });
+kb.addEventListener('input', () => { if (connected) kbSync(); else { kb.value = ''; kbLast = ''; } });
+kb.addEventListener('keydown', (e) => {
+  // Boş kutuda silme tuşu "input" üretmez: doğrudan gönder.
+  if (e.key === 'Backspace' && kb.value === '') { e.preventDefault(); sendKey('Backspace'); }
+  else if (e.key === 'Enter' && !composing) { e.preventDefault(); sendKey('Enter'); }
+  else if (e.key === 'Tab') { e.preventDefault(); sendKey('Tab'); }
+  else if (e.key.startsWith('Arrow') || e.key === 'Escape') { e.preventDefault(); sendKey(e.code || e.key); }
+});
+kb.addEventListener('blur', () => document.body.classList.remove('kb-open'));
+$('kbBtn').onclick = () => {
+  if (document.activeElement === kb) { kb.blur(); return; }
+  kb.value = '';
+  kbLast = '';
+  document.body.classList.add('kb-open');
+  kb.focus();
+};
+
+// ---- dar ekran menüsü (alttan açılan sayfa) ----
+function setMenu(open) {
+  document.body.classList.toggle('menu-open', open);
+  if (open) $('vset').open = true;
+}
+$('menuBtn').onclick = () => setMenu(!document.body.classList.contains('menu-open'));
+$('menuBtn2').onclick = () => setMenu(!document.body.classList.contains('menu-open'));
+$('sheetBg').onclick = () => setMenu(false);

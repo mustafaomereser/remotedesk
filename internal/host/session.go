@@ -134,7 +134,7 @@ func (s *session) readLoop(ctx context.Context) {
 		if err := s.c.ReadJSON(ctx, &m); err != nil {
 			return
 		}
-		if (m.T == "mm" || m.T == "mb" || m.T == "wh" || m.T == "k") && !s.allowed().Control {
+		if (m.T == "mm" || m.T == "mb" || m.T == "wh" || m.T == "k" || m.T == "txt") && !s.allowed().Control {
 			// Yalnızca izleme: basılı kalmış düğme/tuş varsa bırak, gerisini yok say.
 			if m.T == "mb" && !m.D && s.in.ButtonDown(m.B) {
 				s.in.Button(m.B, false, m.X, m.Y)
@@ -195,6 +195,19 @@ func (s *session) readLoop(ctx context.Context) {
 				s.in.Key(m.C, m.D)
 			case routeSim:
 				s.in.BgKey(m.C, m.Ch, m.D)
+			}
+		case "txt":
+			// Telefon klavyesi: tuş kodu olmayan metin (klavye düzeninden bağımsız yazılır).
+			if m.Text == "" || len(m.Text) > 2000 {
+				break
+			}
+			switch s.route(ctx, false) {
+			case routeNormal:
+				s.in.Text(m.Text)
+			case routeSim:
+				for _, r := range m.Text {
+					s.in.BgKey("", string(r), true)
+				}
 			}
 		case "q":
 			if m.V >= 10 && m.V <= 95 {

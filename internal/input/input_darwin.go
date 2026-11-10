@@ -303,3 +303,25 @@ func (in *Injector) ReleaseAll() {
 	}
 	in.mods = map[string]uint64{}
 }
+
+// Text, metni klavye düzeninden bağımsız olarak yazar (Unicode karakter olayları).
+// Telefon klavyesi gibi tuş kodu olmayan girişler için.
+func (in *Injector) Text(s string) {
+	if !load() || !loadBg() {
+		return
+	}
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	desktop.MarkInjected()
+	for _, r := range s {
+		u := utf16Of(string(r))
+		for _, d := range []bool{true, false} {
+			ev := cgEventCreateKeyboardEvent(0, 0, d)
+			if ev == 0 {
+				continue
+			}
+			cgEventKeyboardSetUnicode(ev, uint(len(u)), &u[0])
+			in.post(ev)
+		}
+	}
+}

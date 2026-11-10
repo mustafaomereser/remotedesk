@@ -278,7 +278,7 @@ input::placeholder { color: var(--faint); }
 
 /* ---- viewer ---- */
 
-body.viewer { display: flex; flex-direction: column; height: 100vh; overflow: hidden; background: #000; }
+body.viewer { display: flex; flex-direction: column; height: 100vh; height: 100dvh; overflow: hidden; background: #000; }
 .vbar {
   display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px;
   padding: 10px 16px; background: var(--frame); border-bottom: 1px solid var(--line);
@@ -483,3 +483,57 @@ body.framed.fs .winctl { display: none; }
   body.framed .top .top-status { order: 4; }
 }
 .opt { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--faint); margin-left: 4px; }
+
+/* ---- dokunmatik ekran ve dar ekran ---- */
+
+body.touch .stage { touch-action: none; }
+body.touch canvas#screen { touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.menu-btn { display: none; }
+.mbar { display: none; }
+.kbin {
+  position: fixed; left: 0; bottom: 0; width: 1px; height: 1px; opacity: 0;
+  border: 0; padding: 0; resize: none; font-size: 16px; /* iOS: 16px altı odakta sayfayı büyütür */
+}
+.sheet-bg { display: none; }
+
+body.touch .mbar {
+  display: flex; flex: none; gap: 6px; padding: 8px 10px calc(8px + env(safe-area-inset-bottom));
+  background: var(--frame); border-top: 1px solid var(--line);
+}
+body.touch .mbar button { flex: 1; height: 40px; font-size: 13px; }
+body.touch .mbar button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+body.touch.login .mbar { display: none; }
+
+@media (max-width: 700px) {
+  .vbar { flex-wrap: nowrap; padding: 8px 10px; padding-top: calc(8px + env(safe-area-inset-top)); }
+  .vbar .vinfo { flex: 1 1 auto; min-width: 0; gap: 8px; }
+  .vbar .title { overflow: hidden; text-overflow: ellipsis; }
+  .vbar .stat { display: inline; font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
+  .vbar .badge { display: none; }
+  .menu-btn { display: inline-flex; flex: none; }
+  body.touch .menu-btn { display: none; } /* dokunmatikte menü alttaki çubukta */
+
+  /* Kontroller alttan açılan sayfada */
+  .vbar .vctl { display: none; }
+  body.menu-open .vbar .vctl {
+    display: flex; flex-direction: column; align-items: stretch; gap: 8px;
+    position: fixed; left: 8px; right: 8px; bottom: 8px; z-index: 60;
+    padding: 14px; padding-bottom: calc(14px + env(safe-area-inset-bottom));
+    background: var(--frame); border: 1px solid var(--line-2); border-radius: 18px;
+    box-shadow: 0 -10px 40px rgba(0, 0, 0, .5); max-height: 80dvh; overflow-y: auto;
+    app-region: no-drag; -webkit-app-region: no-drag;
+  }
+  body.menu-open .vctl > button, body.menu-open .vctl > select { width: 100%; height: 42px; max-width: none; font-size: 14px; }
+  body.menu-open .vset summary { display: none; }
+  body.menu-open .vset-pop { position: static; width: auto; max-width: none; box-shadow: none; border-color: var(--line); }
+  body.menu-open .sheet-bg { display: block; position: fixed; inset: 0; z-index: 55; background: rgba(0, 0, 0, .5); }
+  .vrow { padding: 12px 14px; }
+  .vrow select { height: 36px; }
+
+  .callbar { padding: 8px 10px; }
+  .vwarn { font-size: 12px; padding: 6px 10px; }
+}
+
+/* Menü açıkken üst çubuk (ve içindeki alttan açılan sayfa) karartmanın üstünde kalsın:
+   esnek öğe olarak .vbar kendi katman bağlamını oluşturur. */
+body.menu-open .vbar { z-index: 70; }

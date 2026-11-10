@@ -4,6 +4,7 @@ package input
 
 import (
 	"sync"
+	"unicode/utf16"
 	"unsafe"
 
 	"remotedesk/internal/desktop"
@@ -241,5 +242,20 @@ func (in *Injector) ReleaseAll() {
 			}
 			in.buttons[b] = false
 		}
+	}
+}
+
+// Text, metni klavye düzeninden bağımsız olarak yazar (KEYEVENTF_UNICODE). Telefon
+// klavyesi gibi tuş kodu olmayan girişler için.
+func (in *Injector) Text(s string) {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	const keyUnicode = 0x0004
+	for _, u := range utf16.Encode([]rune(s)) {
+		if u == '\n' {
+			u = '\r'
+		}
+		sendKey(keybdInput{Scan: u, Flags: keyUnicode})
+		sendKey(keybdInput{Scan: u, Flags: keyUnicode | keyUp})
 	}
 }
